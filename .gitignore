@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Caches, Thumbnails & Local Databases
+.cache/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+facevault.db
+photos.db
+
+# Machine Learning Large Model Weights (>100MB exceeds GitHub push limit)
+*.onnx
+models/buffalo_s/
+models/clip/*.onnx
+
+# Android Build & Tool Artifacts
+android/.gradle/
+android/.gradle_tools/
+android/build/
+android/app/build/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+
+# IDE & OS metadata
+.idea/
+.vscode/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log

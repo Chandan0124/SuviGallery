@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Suvi Gallery - Private AI Photo & Face Organizer</title>
+  <link rel="stylesheet" href="css/style.css?v=2.6">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div id="app" class="app-container">
+    <!-- Header / Nav -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M7 3H5a2 2 0 0 0-2 2v2M17 3h2a2 2 0 0 1 2 2v2M7 21H5a2 2 0 0 1-2-2v-2M17 21h2a2 2 0 0 0 2-2v-2M9 9h.01M15 9h.01M9 15c1 1 2 1.5 3 1.5s2-.5 3-1.5"/>
+          </svg>
+        </div>
+        <span class="brand-title">Suvi Gallery</span>
+        <span class="badge-offline">100% Offline AI</span>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="tabs">
+        <button id="tabPhotos" class="tab-btn active" onclick="switchTab('photos')">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          Photos <span id="photoCountBadge" class="counter-pill">0</span>
+        </button>
+        <button id="tabFolders" class="tab-btn" onclick="switchTab('folders')">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Folders <span id="folderCountBadge" class="counter-pill">0</span>
+        </button>
+        <button id="tabPeople" class="tab-btn" onclick="switchTab('people')">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          People <span id="peopleCountBadge" class="counter-pill">0</span>
+        </button>
+      </nav>
+
+      <!-- Search Box -->
+      <div class="search-container">
+        <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="searchInput" placeholder="Search people, objects, locations, dates (e.g. cake, Dad, 2024)..." oninput="handleSearch(this.value)">
+        <button id="clearSearchBtn" class="clear-btn" onclick="clearSearch()" style="display:none;">&times;</button>
+      </div>
+
+      <!-- Folder Picker Action -->
+      <div class="header-actions">
+        <button class="btn-primary" onclick="openFolderPicker()">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Add Folder
+        </button>
+      </div>
+    </header>
+
+    <!-- Sub-bar: Folder Dropdown Filter & Live AI Progress HUD -->
+    <div class="sub-bar">
+      <div class="sub-bar-left">
+        <div class="folder-filter-control">
+          <span class="folder-filter-icon">📁</span>
+          <select id="folderDropdown" class="folder-dropdown-select" onchange="handleFolderDropdownChange(this.value)">
+            <option value="">All Folders (All Photos)</option>
+          </select>
+        </div>
+        <button id="togglePhotoSelectBtn" class="btn-select-photos btn-share-trigger" onclick="handleToolbarShareClick()" title="Share multiple photos via WhatsApp or Gallery">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+          <span id="photoSelectBtnText">Share Photos</span>
+        </button>
+      </div>
+
+      <div id="aiStatusHud" class="ai-hud">
+        <div class="hud-item">
+          <span class="pulse-dot"></span>
+          <span id="hudStateText">AI Idle</span>
+        </div>
+        <div class="hud-item">
+          <span id="hudProcessedCount">0 / 0</span> indexed
+        </div>
+        <div class="hud-item">
+          <span id="hudSpeedText">0 fps</span>
+        </div>
+        <div class="hud-item" id="hudProgressContainer" style="display:none;">
+          <div class="progress-bar-bg">
+            <div id="hudProgressBar" class="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Filter Banner (Supports multiple people & relational modes) -->
+    <div id="activeFilterBanner" class="filter-banner" style="display: none;">
+      <div class="filter-tags-group">
+        <span class="filter-label">Filters:</span>
+        <div id="activeFilterTags" class="filter-chips-list"></div>
+      </div>
+
+      <!-- Relational Mode Switcher (Visible when 2+ people selected) -->
+      <div id="relationalModeWrap" class="relational-mode-wrap" style="display: none;">
+        <span class="mode-label">Relationship:</span>
+        <div class="mode-pill-group">
+          <button type="button" class="mode-pill-btn active" id="modeBtnTogether" onclick="setPersonMode('together')">Together (AND)</button>
+          <button type="button" class="mode-pill-btn" id="modeBtnOnly" onclick="setPersonMode('only')" title="Strictly only these people, no other people or photobombers">Strictly ONLY Them</button>
+          <button type="button" class="mode-pill-btn" id="modeBtnEither" onclick="setPersonMode('either')">Either (OR)</button>
+        </div>
+      </div>
+
+      <button class="filter-clear-btn" onclick="clearAllFilters()">Clear All &times;</button>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Photos Tab View (All Photos or Filtered Photos) -->
+      <section id="photosView" class="view-panel active">
+        <div id="photoGrid" class="photo-grid">
+          <!-- Dynamically populated photo tiles -->
+        </div>
+
+        <div id="emptyPhotosState" class="empty-state" style="display:none;">
+          <div class="empty-icon">📁</div>
+          <h3>No Photos Match Your Filter</h3>
+          <p>Try clearing your search or person filter, or select a different folder.</p>
+          <button class="btn-primary" onclick="clearAllFilters()">Show All Photos</button>
+        </div>
+
+        <div id="loadMoreTrigger" class="load-more-sentinel"></div>
+      </section>
+
+      <!-- Folders Tab View (Album Cards) -->
+      <section id="foldersView" class="view-panel" style="display: none;">
+        <div class="section-heading">
+          <div>
+            <h2>Folders & Drives</h2>
+            <p class="section-desc">Click any folder card to view and filter its photos.</p>
+          </div>
+        </div>
+
+        <div id="foldersGrid" class="folders-grid">
+          <!-- Dynamically populated folder album cards -->
+        </div>
+
+        <div id="emptyFoldersState" class="empty-state" style="display:none;">
+          <div class="empty-icon">📁</div>
+          <h3>No Folders Indexed Yet</h3>
+          <p>Click "Add Folder" above to choose a folder or drive to organize.</p>
+          <button class="btn-primary" onclick="openFolderPicker()">Select Folder</button>
+        </div>
+      </section>
+
+      <!-- People Tab View -->
+      <section id="peopleView" class="view-panel" style="display: none;">
+        <div class="people-toolbar">
+          <div class="toolbar-left">
+            <button id="toggleSelectModeBtn" class="btn-secondary" onclick="toggleSelectMode()">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 11 12 14 22 4"/>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+              </svg>
+              <span id="selectModeBtnText">Select Multiple</span>
+            </button>
+            <span class="people-instructions">Click name to rename. Click avatar to filter photos. Check 2+ people to find photos together or combine.</span>
+          </div>
+          <button class="btn-secondary" onclick="triggerClusteringNow()">Re-cluster Now</button>
+        </div>
+
+        <div id="peopleGrid" class="people-grid">
+          <!-- Dynamically populated people avatar cards -->
+        </div>
+
+        <div id="emptyPeopleState" class="empty-state" style="display:none;">
+          <div class="empty-icon">👤</div>
+          <h3>No People Discovered Yet</h3>
+          <p>Face detection is analyzing your photos in the background. Discovered people will appear here automatically.</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- Floating Actions Bar for Multi-select People -->
+    <div id="floatingCombineBar" class="floating-combine-bar" style="display: none;">
+      <span id="selectedPeopleCountText">0 people selected</span>
+      <div class="floating-actions">
+        <button class="btn-primary" id="viewTogetherBtn" onclick="viewSelectedPeopleTogether()">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          View Photos Together
+        </button>
+        <button class="btn-secondary" onclick="openCombineSelectedModal()">Combine into One</button>
+        <button class="btn-secondary" onclick="cancelSelection()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Floating Actions Bar for Multi-select Photos -->
+    <div id="floatingPhotosBar" class="floating-combine-bar floating-photos-dock" style="display: none;">
+      <div class="dock-selection-meta">
+        <span id="selectedPhotosCountText" class="dock-count-badge">0 photos selected</span>
+        <button class="dock-text-btn" id="selectAllPhotosBtn" onclick="toggleSelectAllVisiblePhotos()">Select All</button>
+      </div>
+      <div class="floating-actions">
+        <!-- Share Dropdown Button -->
+        <div class="share-dropdown-wrap" id="shareDropdownWrap">
+          <button class="btn-primary btn-share-main" onclick="toggleShareDropdown(event)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+            <span>Share via WhatsApp</span>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-left:4px;">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <div class="share-dropdown-menu" id="shareDropdownMenu" style="display: none;">
+            <div class="share-menu-header">WhatsApp Delivery</div>
+            <button class="share-menu-item" onclick="shareSelectedPhotosWhatsApp('desktop')">
+              <span class="share-item-icon">💬</span>
+              <div class="share-item-text">
+                <strong>WhatsApp Desktop App</strong>
+                <small>Auto-copies & launches desktop app</small>
+              </div>
+              <span class="default-badge" id="waDesktopBadge">Default</span>
+            </button>
+            <button class="share-menu-item" onclick="shareSelectedPhotosWhatsApp('web')">
+              <span class="share-item-icon">🌐</span>
+              <div class="share-item-text">
+                <strong>WhatsApp Web</strong>
+                <small>Auto-copies & opens in browser</small>
+              </div>
+              <span class="default-badge" id="waWebBadge" style="display:none;">Default</span>
+            </button>
+            <div class="share-menu-divider"></div>
+            <div class="share-target-preference">
+              <span class="pref-label">Set as Default:</span>
+              <label class="toggle-option"><input type="radio" name="waTargetPref" id="prefWaDesktop" value="desktop" checked onchange="setWhatsAppDefaultTarget('desktop')"> Desktop</label>
+              <label class="toggle-option"><input type="radio" name="waTargetPref" id="prefWaWeb" value="web" onchange="setWhatsAppDefaultTarget('web')"> Web</label>
+            </div>
+            <div class="share-menu-divider"></div>
+            <button class="share-menu-item" onclick="copySelectedPhotosClipboard()">
+              <span class="share-item-icon">📋</span>
+              <div class="share-item-text">
+                <strong>Copy Files to Clipboard</strong>
+                <small>Ready to paste in any app (Ctrl+V)</small>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Open in Gallery Action Button -->
+        <button class="btn-secondary btn-gallery-action" onclick="openSelectedPhotosInGallery()" title="Open up to 5 photos in default system gallery (or Explorer if > 5)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <span>Open in Gallery</span>
+        </button>
+
+        <!-- Cancel Selection -->
+        <button class="btn-secondary" onclick="clearPhotoSelection()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Lightbox / Face Inspector Modal -->
+    <div id="lightboxModal" class="lightbox-modal" style="display: none;">
+      <div class="lightbox-overlay" onclick="closeLightbox()"></div>
+      <div class="lightbox-card">
+        <div class="lightbox-header">
+          <div class="lightbox-title-area">
+            <span id="lightboxFilename" class="lightbox-title">Photo Preview</span>
+            <span id="lightboxLocationBadge" class="location-badge" style="display: none;"></span>
+          </div>
+          <div class="lightbox-actions">
+            <!-- Share via WhatsApp -->
+            <button class="btn-lightbox-action btn-wa-share" title="Share photo via WhatsApp" onclick="shareCurrentPhotoWhatsApp()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+              </svg>
+              <span>WhatsApp</span>
+            </button>
+            <!-- Open in Gallery -->
+            <button class="btn-lightbox-action btn-gallery-open" title="Open photo in Windows default Photo Viewer" onclick="openCurrentPhotoInGallery()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+              <span>Gallery</span>
+            </button>
+            <button id="toggleFaceBoxesBtn" class="btn-toggle-faces" onclick="toggleAllFaceBoxes()" title="Toggle face detection boxes">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              <span id="toggleFaceBoxesText">Show Faces</span>
+            </button>
+            <button class="icon-btn" title="Open in Explorer" onclick="revealCurrentPhoto()">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/>
+              </svg>
+            </button>
+            <button class="icon-btn" title="Close" onclick="closeLightbox()">&times;</button>
+          </div>
+        </div>
+
+        <div class="lightbox-viewport">
+          <div class="lightbox-img-wrapper" id="lightboxImgWrapper">
+            <img id="lightboxImg" src="" alt="Full preview" onload="renderFaceOverlays()">
+            <div id="faceBoxesContainer" class="face-boxes-overlay"></div>
+          </div>
+        </div>
+
+        <div class="lightbox-footer">
+          <div id="lightboxFacesList" class="lightbox-faces-chips">
+            <!-- Face tags with gender/age chips -->
+          </div>
+          <div class="lightbox-nav">
+            <button class="btn-secondary" onclick="prevPhoto()">&larr; Prev</button>
+            <button class="btn-secondary" onclick="nextPhoto()">Next &rarr;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Combine Multiple People Modal -->
+    <div id="combineModal" class="modal-dialog-backdrop" style="display: none;">
+      <div class="modal-dialog-card">
+        <h3>Combine Selected People</h3>
+        <p>Merge all selected face groups into a single person:</p>
+        <div class="form-group">
+          <label style="font-size:0.8rem; color:var(--text-muted);">Person Name:</label>
+          <input type="text" id="combineTargetNameInput" class="form-input" placeholder="Enter person name (e.g. Mom, Alex)" />
+        </div>
+        <div class="form-group">
+          <label style="font-size:0.8rem; color:var(--text-muted);">Or pick from selected names:</label>
+          <select id="combineExistingNameSelect" class="form-select" onchange="document.getElementById('combineTargetNameInput').value = this.value"></select>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeCombineModal()">Cancel</button>
+          <button class="btn-primary" onclick="confirmCombineSelected()">Combine into One</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Single Merge Modal -->
+    <div id="mergeModal" class="modal-dialog-backdrop" style="display: none;">
+      <div class="modal-dialog-card">
+        <h3>Merge Person</h3>
+        <p>Merge <strong id="mergeSourcePersonName">...</strong> into another person:</p>
+        <select id="mergeTargetSelect" class="form-select"></select>
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeMergeModal()">Cancel</button>
+          <button class="btn-primary" onclick="confirmMerge()">Merge</button>
+        </div>
+      </div>
+    </div>
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container"></div>
+  </div>
+
+  <script src="js/app.js?v=2.6"></script>
+</body>
+</html>

@@ -124,18 +124,38 @@ class Database:
     def get_image_path(self, image_id: int) -> Optional[str]:
         with self.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT path FROM images WHERE id = ?", (image_id,))
+            cur.execute("SELECT path, filename, directory FROM images WHERE id = ?", (image_id,))
             row = cur.fetchone()
-            return row["path"] if row else None
+            if not row or not row["path"]:
+                return None
+            path = row["path"]
+            if os.path.exists(path):
+                return path
+
+            # Resilient auto-healing fallback if folder was moved or drive letter changed
+            filename = row["filename"]
+            cur.execute("SELECT DISTINCT directory FROM images WHERE directory != ?", (row["directory"],))
+            for alt_dir_row in cur.fetchall():
+                alt_dir = alt_dir_row["directory"]
+                alt_path = os.path.join(alt_dir, filename)
+                if os.path.exists(alt_path):
+                    try:
+                        cur.execute("UPDATE images SET path = ?, directory = ? WHERE id = ?", (alt_path, alt_dir, image_id))
+                        conn.commit()
+                    except Exception:
+                        pass
+                    return alt_path
+            return None
 
     def get_image_paths(self, image_ids: List[int]) -> List[str]:
         if not image_ids:
             return []
-        with self.get_connection() as conn:
-            cur = conn.cursor()
-            placeholders = ",".join("?" for _ in image_ids)
-            cur.execute(f"SELECT path FROM images WHERE id IN ({placeholders})", image_ids)
-            return [r["path"] for r in cur.fetchall() if r["path"] and os.path.exists(r["path"])]
+        resolved_paths = []
+        for iid in image_ids:
+            p = self.get_image_path(iid)
+            if p and os.path.exists(p):
+                resolved_paths.append(p)
+        return resolved_paths
 
     def get_image_filenames(self, image_ids: List[int]) -> List[str]:
         if not image_ids:

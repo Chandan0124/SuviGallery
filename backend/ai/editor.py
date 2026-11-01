@@ -183,18 +183,22 @@ class PhotoEditorEngine:
 
         return binary
 
-    def inpaint_image(self, image_path: str, mask: np.ndarray, snap_edges: bool = True, mode: str = "diffusion", prompt: str = "") -> np.ndarray:
+    def inpaint_image(self, image_input: Any, mask: np.ndarray, snap_edges: bool = True, mode: str = "diffusion", prompt: str = "") -> np.ndarray:
         """
         Erases the masked region and seamlessly reconstructs the background.
+        image_input: File path (str) or loaded BGR numpy array.
         mode:
           - 'diffusion': Photorealistic Generative Fill on GTX 1660 Super GPU.
           - 'lama': Fast on-device neural pattern interpolation.
         If snap_edges is True, automatically contours and tightens the mask to the
         exact physical object silhouette using GrabCut before neural inpainting.
         """
-        img_bgr = cv2.imread(image_path)
-        if img_bgr is None:
-            raise FileNotFoundError(f"Could not load image at {image_path}")
+        if isinstance(image_input, np.ndarray):
+            img_bgr = image_input.copy()
+        else:
+            img_bgr = cv2.imread(str(image_input))
+            if img_bgr is None:
+                raise FileNotFoundError(f"Could not load image at {image_input}")
 
         h, w = img_bgr.shape[:2]
 
@@ -442,15 +446,19 @@ class PhotoEditorEngine:
         result_bgr[c_y1:c_y2, c_x1:c_x2] = cloned_crop
         return result_bgr
 
-    def darken_hair(self, image_path: str, mask: np.ndarray, intensity: float = 0.70) -> np.ndarray:
+    def darken_hair(self, image_input: Any, mask: np.ndarray, intensity: float = 0.70) -> np.ndarray:
         """
         Naturally darkens hair to rich black/dark tones using LAB color space curve modulation.
+        image_input: File path (str) or loaded BGR numpy array.
         Preserves natural specular reflections, hair shine, and strand definition.
         intensity: 0.0 (no change) to 1.0 (deep natural black).
         """
-        img_bgr = cv2.imread(image_path)
-        if img_bgr is None:
-            raise FileNotFoundError(f"Could not load image at {image_path}")
+        if isinstance(image_input, np.ndarray):
+            img_bgr = image_input.copy()
+        else:
+            img_bgr = cv2.imread(str(image_input))
+            if img_bgr is None:
+                raise FileNotFoundError(f"Could not load image at {image_input}")
 
         h, w = img_bgr.shape[:2]
         if mask.shape[:2] != (h, w):
@@ -529,14 +537,17 @@ class PhotoEditorEngine:
         else:
             cv2.imwrite(candidate_path, edited_bgr)
 
-        # Copy EXIF metadata from original if possible
+        # Copy EXIF metadata from original if possible, resetting orientation to Normal (1)
+        # since edited_bgr pixels are already written in upright orientation.
         try:
             with Image.open(original_path) as orig_img:
-                exif = orig_img.info.get("exif")
-                if exif:
+                exif_obj = orig_img.getexif()
+                if exif_obj:
+                    # Reset Orientation (0x0112) to 1 (normal) so viewers do not rotate it again
+                    exif_obj[0x0112] = 1
                     with Image.open(candidate_path) as edit_img:
-                        edit_img.save(candidate_path, exif=exif, quality=96)
-        except Exception:
-            pass
+                        edit_img.save(candidate_path, exif=exif_obj, quality=96)
+        except Exception as e:
+            print(f"[!] Warning: Could not preserve EXIF: {e}")
 
         return candidate_path

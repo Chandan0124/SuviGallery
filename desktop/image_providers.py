@@ -125,8 +125,6 @@ class EditPreviewProvider(QQuickImageProvider):
             if os.path.exists(preview_path):
                 reader = QImageReader(preview_path)
                 reader.setAutoTransform(True)
-                if requestedSize.isValid() and requestedSize.width() > 0 and requestedSize.height() > 0:
-                    reader.setScaledSize(requestedSize)
                 img = reader.read()
                 if not img.isNull():
                     pix = QPixmap.fromImage(img)

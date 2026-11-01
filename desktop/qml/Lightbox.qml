@@ -445,8 +445,6 @@ Rectangle {
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: true
-                sourceSize.width: 1920
-                sourceSize.height: 1080
             }
 
             // Interactive AI Studio Draw / Masking Canvas

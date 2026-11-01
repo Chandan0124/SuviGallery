@@ -550,11 +550,15 @@ class GalleryBridge(QObject):
                     self.isEditingBusy.emit(False)
                     return
 
-                with Image.open(path) as img:
-                    orig_w, orig_h = img.size
+                img_bgr = cv2.imread(path)
+                if img_bgr is None:
+                    self.toastNotification.emit("Could not load photo from disk", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
 
+                orig_h, orig_w = img_bgr.shape[:2]
                 mask_bin = self.editor_engine.decode_mask_base64(mask_base64, (orig_h, orig_w))
-                inpainted_bgr = self.editor_engine.inpaint_image(path, mask_bin, snap_edges=snap_edges, mode=mode, prompt=prompt)
+                inpainted_bgr = self.editor_engine.inpaint_image(img_bgr, mask_bin, snap_edges=snap_edges, mode=mode, prompt=prompt)
                 self.editor_engine.generate_preview(inpainted_bgr, image_id)
 
                 ts = int(time.time())
@@ -583,11 +587,15 @@ class GalleryBridge(QObject):
                     self.isEditingBusy.emit(False)
                     return
 
-                with Image.open(path) as img:
-                    orig_w, orig_h = img.size
+                img_bgr = cv2.imread(path)
+                if img_bgr is None:
+                    self.toastNotification.emit("Could not load photo from disk", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
 
+                orig_h, orig_w = img_bgr.shape[:2]
                 mask_bin = self.editor_engine.decode_mask_base64(mask_base64, (orig_h, orig_w))
-                darkened_bgr = self.editor_engine.darken_hair(path, mask_bin, intensity=intensity)
+                darkened_bgr = self.editor_engine.darken_hair(img_bgr, mask_bin, intensity=intensity)
                 self.editor_engine.generate_preview(darkened_bgr, image_id)
 
                 ts = int(time.time())

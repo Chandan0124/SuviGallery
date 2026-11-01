@@ -531,10 +531,11 @@ class GalleryBridge(QObject):
             subprocess.Popen(f'explorer.exe /select,"{resolved}"', shell=True)
 
     # ========================================================
-    # AI Photo Editor Studio (GTX 1660 Super DirectML & OpenCV)
+    # AI Photo Editor Studio (Neural LaMa & Edge-Detection)
     # ========================================================
     @Slot(int, str)
-    def applyMagicEraser(self, image_id: int, mask_base64: str):
+    @Slot(int, str, bool)
+    def applyMagicEraser(self, image_id: int, mask_base64: str, snap_edges: bool = True):
         if not self.editor_engine or not mask_base64:
             return
 
@@ -551,12 +552,12 @@ class GalleryBridge(QObject):
                     orig_w, orig_h = img.size
 
                 mask_bin = self.editor_engine.decode_mask_base64(mask_base64, (orig_h, orig_w))
-                inpainted_bgr = self.editor_engine.inpaint_image(path, mask_bin)
+                inpainted_bgr = self.editor_engine.inpaint_image(path, mask_bin, snap_edges=snap_edges)
                 self.editor_engine.generate_preview(inpainted_bgr, image_id)
 
                 ts = int(time.time())
                 self.editPreviewReady.emit(image_id, "eraser", ts)
-                self.toastNotification.emit("Magic Eraser applied! Preview ready.", "success")
+                self.toastNotification.emit("Magic Eraser applied! Object removed seamlessly.", "success")
             except Exception as e:
                 print(f"[!] applyMagicEraser error: {e}")
                 self.toastNotification.emit(f"Erase error: {e}", "warning")

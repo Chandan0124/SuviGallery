@@ -17,6 +17,7 @@ photos.db
 *.onnx
 models/buffalo_s/
 models/clip/*.onnx
+models/editor/
 
 # Android Build & Tool Artifacts
 android/.gradle/

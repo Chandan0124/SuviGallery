@@ -25,6 +25,7 @@ Rectangle {
     property bool hasEditedPreview: false
     property int editTimestamp: 0
     property bool isEditingBusy: false
+    property bool autoSnapEdges: true
 
     Connections {
         target: gallery
@@ -629,7 +630,7 @@ Rectangle {
                     }
 
                     Text {
-                        text: lightboxRoot.activeEditTool === "eraser" ? "Erasing & inpainting with DirectML GPU..." : "Applying Natural Hair Darkening..."
+                        text: lightboxRoot.activeEditTool === "eraser" ? (lightboxRoot.autoSnapEdges ? "Detecting object edges & inpainting with LaMa AI..." : "Inpainting background with LaMa AI...") : "Applying Natural Hair Darkening..."
                         color: "#ffffff"
                         font.family: root.fSans
                         font.pixelSize: 12
@@ -1125,6 +1126,48 @@ Rectangle {
                     }
                 }
 
+                // Auto Edge Snap Toggle Button
+                Rectangle {
+                    visible: lightboxRoot.activeEditTool === "eraser"
+                    width: edgeSnapRow.implicitWidth + 18
+                    height: 32
+                    radius: 4
+                    color: lightboxRoot.autoSnapEdges ? Qt.rgba(16/255, 185/255, 129/255, 0.22) : (edgeSnapMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : Qt.rgba(255, 255, 255, 0.04))
+                    border.color: lightboxRoot.autoSnapEdges ? "#10b981" : Qt.rgba(255, 255, 255, 0.12)
+                    border.width: lightboxRoot.autoSnapEdges ? 1.5 : 1
+
+                    RowLayout {
+                        id: edgeSnapRow
+                        anchors.centerIn: parent
+                        spacing: 6
+                        Text {
+                            text: "\uE71E"
+                            font.family: lightboxRoot.fIcon
+                            font.pixelSize: 13
+                            color: lightboxRoot.autoSnapEdges ? "#10b981" : root.cTextMuted
+                        }
+                        Text {
+                            text: "Auto Edge Snap"
+                            color: lightboxRoot.autoSnapEdges ? "#ffffff" : root.cTextMuted
+                            font.family: root.fSans
+                            font.pixelSize: 11
+                            font.bold: lightboxRoot.autoSnapEdges
+                        }
+                    }
+
+                    MouseArea {
+                        id: edgeSnapMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: lightboxRoot.autoSnapEdges = !lightboxRoot.autoSnapEdges
+                    }
+
+                    ToolTip.visible: edgeSnapMouse.containsMouse
+                    ToolTip.text: "Automatically detects and snaps mask to object contours"
+                    ToolTip.delay: 300
+                }
+
                 // Vertical Divider
                 Rectangle {
                     width: 1
@@ -1268,7 +1311,7 @@ Rectangle {
                             if (lightboxRoot.currentPhoto) {
                                 var maskData = maskCanvas.toDataURL("image/png");
                                 if (lightboxRoot.activeEditTool === "eraser") {
-                                    gallery.applyMagicEraser(lightboxRoot.currentPhoto.id, maskData);
+                                    gallery.applyMagicEraser(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.autoSnapEdges);
                                 } else {
                                     gallery.applyHairDarken(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.hairDarkness);
                                 }

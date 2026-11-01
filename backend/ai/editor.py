@@ -17,6 +17,41 @@ class PhotoEditorEngine:
         self.lama_session = None
         self._init_lama()
 
+        # Local Diffusion Inpainting Engine (GTX 1660 Super / CUDA)
+        self.diffusion_pipe = None
+
+    def _init_diffusion(self) -> bool:
+        """Initializes Stable Diffusion Inpainting pipeline on CUDA (GTX 1660 Super)."""
+        if self.diffusion_pipe is not None:
+            return True
+
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                print("[!] CUDA not available for Diffusion inpainting.")
+                return False
+
+            print("[*] Loading Local Diffusion Inpainting on GPU (GTX 1660 Super)...")
+            from diffusers import AutoPipelineForInpainting, DPMSolverMultistepScheduler
+            pipe = AutoPipelineForInpainting.from_pretrained(
+                "runwayml/stable-diffusion-inpainting",
+                variant="fp16",
+                torch_dtype=torch.float16,
+                safety_checker=None,
+                requires_safety_checker=False
+            )
+            # Full float32 on GTX 1660 prevents Turing architecture fp16 underflow/black frames
+            pipe = pipe.to(torch.float32)
+            pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+            pipe.enable_attention_slicing()
+            self.diffusion_pipe = pipe.to("cuda")
+            print("[+] Local Diffusion Engine initialized on GPU (GTX 1660 Super) successfully!")
+            return True
+        except Exception as e:
+            print(f"[!] Warning: Could not initialize Diffusion engine: {e}")
+            self.diffusion_pipe = None
+            return False
+
     def _init_lama(self):
         """Initializes LaMa inpainting model via ONNX Runtime."""
         if not os.path.exists(self.lama_path):
@@ -146,9 +181,12 @@ class PhotoEditorEngine:
 
         return binary
 
-    def inpaint_image(self, image_path: str, mask: np.ndarray, snap_edges: bool = True) -> np.ndarray:
+    def inpaint_image(self, image_path: str, mask: np.ndarray, snap_edges: bool = True, mode: str = "diffusion", prompt: str = "") -> np.ndarray:
         """
         Erases the masked region and seamlessly reconstructs the background.
+        mode:
+          - 'diffusion': Photorealistic Generative Fill on GTX 1660 Super GPU.
+          - 'lama': Fast on-device neural pattern interpolation.
         If snap_edges is True, automatically contours and tightens the mask to the
         exact physical object silhouette using GrabCut before neural inpainting.
         """
@@ -171,18 +209,129 @@ class PhotoEditorEngine:
         if snap_edges:
             mask = self.snap_mask_to_edges(img_bgr, mask, dilation_px=2)
 
-        # 1. Use LaMa Neural Inpainting if model is loaded
+        # 1. Use Local Diffusion Generative Inpainting if selected
+        if mode == "diffusion":
+            try:
+                if self._init_diffusion():
+                    return self._run_diffusion_inpainting(img_bgr, mask, prompt=prompt)
+            except Exception as e:
+                print(f"[!] Diffusion inpainting error ({e}). Falling back to LaMa.")
+
+        # 2. Use LaMa Neural Inpainting if model is loaded
         if self.lama_session is not None:
             try:
                 return self._run_lama_inpainting(img_bgr, mask)
             except Exception as e:
                 print(f"[!] LaMa inpainting error ({e}). Falling back to OpenCV.")
 
-        # 2. High-quality OpenCV Telea inpainting fallback
+        # 3. High-quality OpenCV Telea inpainting fallback
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         dilated_mask = cv2.dilate(mask, kernel, iterations=2)
         inpainted = cv2.inpaint(img_bgr, dilated_mask, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
         return inpainted
+
+    def _run_diffusion_inpainting(self, img_bgr: np.ndarray, mask_bin: np.ndarray, prompt: str = "") -> np.ndarray:
+        """
+        Executes Local Stable Diffusion Inpainting on the NVIDIA GTX 1660 Super.
+        Generates brand-new photorealistic textures (roads, curbs, leaves) with matching
+        perspective and natural camera sensor grain, eliminating watercolor smearing.
+        """
+        import torch
+        from PIL import Image
+
+        img_h, img_w = img_bgr.shape[:2]
+        ys, xs = np.where(mask_bin > 0)
+        min_x, max_x = np.min(xs), np.max(xs)
+        min_y, max_y = np.min(ys), np.max(ys)
+
+        box_w = max_x - min_x
+        box_h = max_y - min_y
+        center_x = (min_x + max_x) // 2
+        center_y = (min_y + max_y) // 2
+
+        # Square crop with 20% margin around target object for contextual awareness
+        max_side = max(box_w, box_h)
+        crop_size = max(512, int(max_side * 1.45))
+        half = crop_size // 2
+
+        c_x1 = max(0, center_x - half)
+        c_y1 = max(0, center_y - half)
+        c_x2 = min(img_w, center_x + half)
+        c_y2 = min(img_h, center_y + half)
+
+        crop_img = img_bgr[c_y1:c_y2, c_x1:c_x2]
+        crop_mask = mask_bin[c_y1:c_y2, c_x1:c_x2]
+        cur_h, cur_w = crop_img.shape[:2]
+
+        # Pad symmetrically with BORDER_REFLECT_101 to keep exact 1:1 aspect ratio
+        pad_top = max(0, half - (center_y - c_y1))
+        pad_bottom = max(0, crop_size - cur_h - pad_top)
+        pad_left = max(0, half - (center_x - c_x1))
+        pad_right = max(0, crop_size - cur_w - pad_left)
+
+        if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+            square_img = cv2.copyMakeBorder(crop_img, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_REFLECT_101)
+            square_mask = cv2.copyMakeBorder(crop_mask, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=0)
+        else:
+            square_img = crop_img
+            square_mask = crop_mask
+
+        sq_size = square_img.shape[0]
+
+        # Dilate mask 4px to ensure zero trace of the object rim remains
+        d_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        dilated_sq_mask = cv2.dilate(square_mask, d_k, iterations=1)
+
+        # Convert to PIL RGB for Diffusion pipeline at 512x512
+        sq_rgb = cv2.cvtColor(square_img, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(sq_rgb).resize((512, 512), Image.Resampling.BILINEAR)
+        pil_mask = Image.fromarray(dilated_sq_mask).resize((512, 512), Image.Resampling.NEAREST)
+
+        # Photorealistic auto-prompt tuning
+        if not prompt or not prompt.strip():
+            inpaint_prompt = "clean seamless outdoor background, continuous natural road surface and foliage, sharp high resolution photography, matching sunlight"
+        else:
+            inpaint_prompt = prompt.strip()
+
+        neg_prompt = "scooter, motorcycle, vehicle, person, human, blurry, smudges, watercolor, cartoon, painterly, artifacts, ghosting, dark blotches"
+
+        # Run diffusion inference on GPU (12 steps with DPMSolver takes ~14s)
+        with torch.inference_mode():
+            gen_pil = self.diffusion_pipe(
+                prompt=inpaint_prompt,
+                negative_prompt=neg_prompt,
+                image=pil_img,
+                mask_image=pil_mask,
+                num_inference_steps=12,
+                guidance_scale=7.5
+            ).images[0]
+
+        # Convert back to numpy BGR and upscale with Lanczos4
+        gen_rgb = np.array(gen_pil)
+        gen_bgr_512 = cv2.cvtColor(gen_rgb, cv2.COLOR_RGB2BGR)
+        out_square = cv2.resize(gen_bgr_512, (sq_size, sq_size), interpolation=cv2.INTER_LANCZOS4)
+
+        # Un-pad back to actual crop
+        out_crop = out_square[pad_top:pad_top+cur_h, pad_left:pad_left+cur_w]
+        safe_crop_mask = dilated_sq_mask[pad_top:pad_top+cur_h, pad_left:pad_left+cur_w]
+
+        # Camera sensor grain injection
+        bg_pixels = crop_img[safe_crop_mask == 0]
+        if len(bg_pixels) > 50:
+            gray_bg = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            high_pass = cv2.Laplacian(gray_bg, cv2.CV_32F)
+            bg_noise_std = np.std(high_pass[safe_crop_mask == 0])
+            if bg_noise_std > 1.0:
+                grain = np.random.normal(0, min(bg_noise_std * 0.40, 7.0), out_crop.shape).astype(np.float32)
+                out_crop = np.clip(out_crop.astype(np.float32) + grain, 0, 255).astype(np.uint8)
+
+        # Smooth Feathered Gaussian Alpha Blending (Zero watercolor bleed!)
+        feather = cv2.GaussianBlur(safe_crop_mask.astype(np.float32) / 255.0, (25, 25), 0)[:, :, np.newaxis]
+        blended_crop = (out_crop.astype(np.float32) * feather + crop_img.astype(np.float32) * (1.0 - feather)).astype(np.uint8)
+
+        result_bgr = img_bgr.copy()
+        result_bgr[c_y1:c_y2, c_x1:c_x2] = blended_crop
+        return result_bgr
 
     def _run_lama_inpainting(self, img_bgr: np.ndarray, mask_bin: np.ndarray) -> np.ndarray:
         """

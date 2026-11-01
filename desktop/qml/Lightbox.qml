@@ -26,6 +26,7 @@ Rectangle {
     property int editTimestamp: 0
     property bool isEditingBusy: false
     property bool autoSnapEdges: true
+    property string inpaintMode: "diffusion" // "diffusion" (GTX 1660 Super) | "lama" (Fast CPU)
 
     Connections {
         target: gallery
@@ -1168,6 +1169,54 @@ Rectangle {
                     ToolTip.delay: 300
                 }
 
+                // AI Inpainting Engine Mode Selector (GTX 1660 Diffusion vs Fast LaMa)
+                Rectangle {
+                    visible: lightboxRoot.activeEditTool === "eraser"
+                    width: inpaintModeRow.implicitWidth + 18
+                    height: 32
+                    radius: 4
+                    color: lightboxRoot.inpaintMode === "diffusion" ? Qt.rgba(16/255, 185/255, 129/255, 0.22) : (inpaintModeMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : Qt.rgba(255, 255, 255, 0.04))
+                    border.color: lightboxRoot.inpaintMode === "diffusion" ? "#10b981" : Qt.rgba(255, 255, 255, 0.12)
+                    border.width: lightboxRoot.inpaintMode === "diffusion" ? 1.5 : 1
+
+                    RowLayout {
+                        id: inpaintModeRow
+                        anchors.centerIn: parent
+                        spacing: 6
+                        Text {
+                            text: lightboxRoot.inpaintMode === "diffusion" ? "\uE945" : "\uE75C"
+                            font.family: lightboxRoot.fIcon
+                            font.pixelSize: 13
+                            color: lightboxRoot.inpaintMode === "diffusion" ? "#10b981" : root.cTextMuted
+                        }
+                        Text {
+                            text: lightboxRoot.inpaintMode === "diffusion" ? "AI Diffusion (GTX 1660)" : "Fast LaMa (CPU)"
+                            color: lightboxRoot.inpaintMode === "diffusion" ? "#ffffff" : root.cTextMuted
+                            font.family: root.fSans
+                            font.pixelSize: 11
+                            font.bold: lightboxRoot.inpaintMode === "diffusion"
+                        }
+                    }
+
+                    MouseArea {
+                        id: inpaintModeMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (lightboxRoot.inpaintMode === "diffusion") {
+                                lightboxRoot.inpaintMode = "lama";
+                            } else {
+                                lightboxRoot.inpaintMode = "diffusion";
+                            }
+                        }
+                    }
+
+                    ToolTip.visible: inpaintModeMouse.containsMouse
+                    ToolTip.text: lightboxRoot.inpaintMode === "diffusion" ? "GPU Generative Diffusion (GTX 1660 Super) - Photorealistic flagship quality" : "Fast on-device pattern inpainter - Instant for small blemishes"
+                    ToolTip.delay: 300
+                }
+
                 // Vertical Divider
                 Rectangle {
                     width: 1
@@ -1311,7 +1360,7 @@ Rectangle {
                             if (lightboxRoot.currentPhoto) {
                                 var maskData = maskCanvas.toDataURL("image/png");
                                 if (lightboxRoot.activeEditTool === "eraser") {
-                                    gallery.applyMagicEraser(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.autoSnapEdges);
+                                    gallery.applyMagicEraser(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.autoSnapEdges, lightboxRoot.inpaintMode, "");
                                 } else {
                                     gallery.applyHairDarken(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.hairDarkness);
                                 }

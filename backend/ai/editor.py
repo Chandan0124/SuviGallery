@@ -566,29 +566,31 @@ class PhotoEditorEngine:
 
         # High-frequency strand texture extraction via edge-preserving filter
         L_uint8 = np.clip(L, 0, 255).astype(np.uint8)
-        L_base = cv2.bilateralFilter(L_uint8, d=7, sigmaColor=25, sigmaSpace=5).astype(np.float32)
-        L_detail = L - L_base
+        L_base = cv2.bilateralFilter(L_uint8, d=11, sigmaColor=30, sigmaSpace=7).astype(np.float32)
+        strand_detail = L - L_base
 
-        # Only darken pixels where L_base > ref_L (i.e. gray/white/light hair)
-        # Already-dark hair has excess_L == 0 -> receives 0 change!
-        excess_L = np.maximum(0.0, L_base - ref_L)
-        clamp_intensity = float(np.clip(intensity, 0.20, 1.0))
+        # Skin & Forehead Protection (warm flesh tone)
+        skin_score = np.clip((A - 132.0) / 8.0, 0.0, 1.0) * np.clip((B - 133.0) / 8.0, 0.0, 1.0)
+
+        # White/gray hair excess above natural dark hair level
+        excess = np.maximum(0.0, L - ref_L)
+        # Only blend pixels that are distinctly brighter than natural dark hair (excess > 8)
+        # Normal dark hair (L <= ref_L + 8) gets zero change!
+        hair_blend = np.clip((excess - 8.0) / 22.0, 0.0, 1.0)
 
         # Soft feather on the hair mask boundary
         hair_feather = cv2.GaussianBlur(crop_mask.astype(np.float32) / 255.0, (7, 7), 0)
 
-        # Full natural darkening matching the real hair curve:
-        effective_darken = excess_L * (0.92 * clamp_intensity) * hair_feather
+        clamp_intensity = float(np.clip(intensity, 0.20, 1.0))
+        active_weight = hair_blend * clamp_intensity * hair_feather * (1.0 - skin_score * 0.95)
 
-        # Darken base luminance while re-adding high-frequency strand detail (1.10x boost for crisp individual strands)
-        L_new_base = L_base - effective_darken
-        L_final = np.clip(L_new_base + L_detail * 1.10, 15.0, 255.0)
+        # Natural digital hair dye: replaces gray hair with natural dark hair base + micro strand texture
+        L_dyed = ref_L + strand_detail * 0.70
+        L_final = np.clip(L * (1.0 - active_weight) + L_dyed * active_weight, 15.0, 255.0)
 
         # Natural melanin undertone transfer for gray hairs
-        max_excess = max(1.0, float(np.max(excess_L)))
-        blend_chroma = np.clip((excess_L / max_excess) * 0.95, 0.0, 0.95) * clamp_intensity * hair_feather
-        A_final = A * (1.0 - blend_chroma) + ref_A * blend_chroma
-        B_final = B * (1.0 - blend_chroma) + ref_B * blend_chroma
+        A_final = A * (1.0 - active_weight) + ref_A * active_weight
+        B_final = B * (1.0 - active_weight) + ref_B * active_weight
 
         res_lab = np.zeros_like(lab)
         res_lab[:, :, 0] = L_final

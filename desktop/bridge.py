@@ -574,7 +574,8 @@ class GalleryBridge(QObject):
         threading.Thread(target=run, daemon=True).start()
 
     @Slot(int, str, float)
-    def applyHairDarken(self, image_id: int, mask_base64: str, intensity: float):
+    @Slot(int, str, float, bool)
+    def applyHairDarken(self, image_id: int, mask_base64: str, intensity: float, snap_edges: bool = True):
         if not self.editor_engine or not mask_base64:
             return
 
@@ -595,7 +596,7 @@ class GalleryBridge(QObject):
 
                 orig_h, orig_w = img_bgr.shape[:2]
                 mask_bin = self.editor_engine.decode_mask_base64(mask_base64, (orig_h, orig_w))
-                darkened_bgr = self.editor_engine.darken_hair(img_bgr, mask_bin, intensity=intensity)
+                darkened_bgr = self.editor_engine.darken_hair(img_bgr, mask_bin, intensity=intensity, snap_edges=snap_edges)
                 self.editor_engine.generate_preview(darkened_bgr, image_id)
 
                 ts = int(time.time())

@@ -151,6 +151,65 @@ class PhotoEditorEngine:
         final_mask[ry1:ry2, rx1:rx2] = filled_crop
         return final_mask
 
+    def snap_mask_to_hair(self, img_bgr: np.ndarray, rough_mask: np.ndarray) -> np.ndarray:
+        """
+        Automatically snaps a rough, loose brush mask to the exact natural contour/silhouette
+        of the subject's hair. Rejects background bokeh, sky, and walls, and prevents dark paint
+        spillover outside the hair boundary.
+        """
+        if np.count_nonzero(rough_mask) == 0:
+            return rough_mask
+
+        h, w = img_bgr.shape[:2]
+        ys, xs = np.where(rough_mask > 0)
+        pad = max(30, int(max(np.max(xs) - np.min(xs), np.max(ys) - np.min(ys)) * 0.15))
+        rx1, ry1 = max(0, np.min(xs) - pad), max(0, np.min(ys) - pad)
+        rx2, ry2 = min(w, np.max(xs) + pad), min(h, np.max(ys) + pad)
+        rw, rh = rx2 - rx1, ry2 - ry1
+
+        if rw < 10 or rh < 10:
+            return rough_mask
+
+        crop_img = img_bgr[ry1:ry2, rx1:rx2]
+        crop_rough = rough_mask[ry1:ry2, rx1:rx2]
+
+        gray = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+        lab = cv2.cvtColor(crop_img, cv2.COLOR_BGR2LAB)
+        L = lab[:, :, 0]
+        B = lab[:, :, 2]
+
+        sobelx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        edge_mag = np.sqrt(sobelx**2 + sobely**2)
+
+        gc_mask = np.full((rh, rw), cv2.GC_PR_BGD, dtype=np.uint8)
+        gc_mask[crop_rough > 0] = cv2.GC_PR_FGD
+        gc_mask[(crop_rough > 0) & (L < 85) & (edge_mag > 15)] = cv2.GC_FGD
+        is_bg = ((edge_mag < 16) & (L > 120)) | (L > 170) | ((B > 142) & (L > 130))
+        gc_mask[(crop_rough > 0) & is_bg] = cv2.GC_BGD
+
+        gc_mask[0:8, :] = cv2.GC_BGD
+        gc_mask[-8:, :] = cv2.GC_BGD
+        gc_mask[:, 0:8] = cv2.GC_BGD
+        gc_mask[:, -8:] = cv2.GC_BGD
+
+        bgd_model = np.zeros((1, 65), np.float64)
+        fgd_model = np.zeros((1, 65), np.float64)
+
+        try:
+            cv2.grabCut(crop_img, gc_mask, None, bgd_model, fgd_model, 4, cv2.GC_INIT_WITH_MASK)
+            segmented_crop = np.where((gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+            segmented_crop = cv2.bitwise_and(segmented_crop, crop_rough)
+        except Exception:
+            segmented_crop = crop_rough
+
+        if np.count_nonzero(segmented_crop) < 0.10 * np.count_nonzero(crop_rough):
+            segmented_crop = cv2.bitwise_and(crop_rough, (~is_bg).astype(np.uint8)*255)
+
+        final_mask = np.zeros_like(rough_mask)
+        final_mask[ry1:ry2, rx1:rx2] = segmented_crop
+        return final_mask
+
     def decode_mask_base64(self, mask_base64: str, target_shape: Tuple[int, int]) -> np.ndarray:
         """
         Decodes a Base64-encoded PNG mask from the QML Canvas and resizes it to the exact 
@@ -446,11 +505,11 @@ class PhotoEditorEngine:
         result_bgr[c_y1:c_y2, c_x1:c_x2] = cloned_crop
         return result_bgr
 
-    def darken_hair(self, image_input: Any, mask: np.ndarray, intensity: float = 0.70) -> np.ndarray:
+    def darken_hair(self, image_input: Any, mask: np.ndarray, intensity: float = 0.70, snap_edges: bool = True) -> np.ndarray:
         """
         Naturally darkens gray/light hair strands while preserving fine strand textures,
-        specular sheen, and scalp/skin tones. Leaves already-dark hair completely unaffected
-        for zero visible stroke boundaries.
+        specular sheen, and hair silhouette. Rejects background bokeh and leaves already-dark
+        hair completely unaffected for zero visible stroke boundaries or paint smudges.
         intensity: 0.20 to 1.00 (subtle natural blend to deep rich black).
         """
         if isinstance(image_input, np.ndarray):
@@ -468,6 +527,12 @@ class PhotoEditorEngine:
         if np.count_nonzero(mask_bin) == 0:
             return img_bgr
 
+        # Automatically detect and snap to hair silhouette/edges, stripping away background bokeh
+        if snap_edges:
+            mask_bin = self.snap_mask_to_hair(img_bgr, mask_bin)
+            if np.count_nonzero(mask_bin) == 0:
+                return img_bgr
+
         # Crop to active bounding box with padding for fast processing on large photos
         ys, xs = np.where(mask_bin > 0)
         pad = max(40, int(max(np.max(xs) - np.min(xs), np.max(ys) - np.min(ys)) * 0.15))
@@ -477,9 +542,7 @@ class PhotoEditorEngine:
         x2 = min(w, np.max(xs) + pad)
 
         crop_img = img_bgr[y1:y2, x1:x2]
-        crop_mask = mask_bin[y1:y2, x1:x2].astype(np.float32) / 255.0
-        # Soft feather on brush mask edges
-        crop_mask = cv2.GaussianBlur(crop_mask, (15, 15), 0)
+        crop_mask = mask_bin[y1:y2, x1:x2]
 
         # Convert to LAB color space
         lab = cv2.cvtColor(crop_img, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -487,47 +550,45 @@ class PhotoEditorEngine:
         A = lab[:, :, 1]
         B = lab[:, :, 2]
 
-        # Sample natural dark hair reference in the region (candidates: L between 20 and 80, not skin)
-        dark_cands = (L > 20) & (L < 80) & ((A < 133) | (B < 135))
-        if np.count_nonzero(dark_cands) > 80:
-            ref_L = float(np.percentile(L[dark_cands], 30))
+        # Sample natural dark hair reference in the region
+        dark_cands = (L > 20) & (L < 80) & (crop_mask > 0)
+        if np.count_nonzero(dark_cands) < 30:
+            dark_cands = (L > 20) & (L < 80)
+
+        if np.count_nonzero(dark_cands) > 40:
+            ref_L = float(np.percentile(L[dark_cands], 25))
             ref_A = float(np.median(A[dark_cands]))
             ref_B = float(np.median(B[dark_cands]))
         else:
-            ref_L = 45.0
-            ref_A = 128.0
-            ref_B = 133.0
-
-        # Skin & Scalp Protection:
-        # Human skin has warm tone (A > 131, B > 133). Protect skin and scalp from dark blotches
-        skin_A_excess = np.maximum(0.0, A - 131.0)
-        skin_B_excess = np.maximum(0.0, B - 133.0)
-        skin_score = np.clip((skin_A_excess * skin_B_excess) / 25.0, 0.0, 1.0)
-        # Scalp is lighter skin, protect it from turning dark
-        scalp_protect = skin_score * np.clip((L - 85.0) / 45.0, 0.0, 1.0)
+            ref_L = 50.0
+            ref_A = 130.0
+            ref_B = 126.0
 
         # High-frequency strand texture extraction via edge-preserving filter
         L_uint8 = np.clip(L, 0, 255).astype(np.uint8)
-        L_base = cv2.bilateralFilter(L_uint8, d=9, sigmaColor=35, sigmaSpace=7).astype(np.float32)
+        L_base = cv2.bilateralFilter(L_uint8, d=7, sigmaColor=25, sigmaSpace=5).astype(np.float32)
         L_detail = L - L_base
 
         # Only darken pixels where L_base > ref_L (i.e. gray/white/light hair)
         # Already-dark hair has excess_L == 0 -> receives 0 change!
         excess_L = np.maximum(0.0, L_base - ref_L)
-        clamp_intensity = float(np.clip(intensity, 0.15, 1.0))
+        clamp_intensity = float(np.clip(intensity, 0.20, 1.0))
 
-        # Effective progressive darkening factor
-        effective_darken = excess_L * (0.88 * clamp_intensity) * (1.0 - 0.88 * scalp_protect) * crop_mask
+        # Soft feather on the hair mask boundary
+        hair_feather = cv2.GaussianBlur(crop_mask.astype(np.float32) / 255.0, (7, 7), 0)
 
-        # Darken base luminance while re-adding high-frequency strand detail and specular shine
+        # Full natural darkening matching the real hair curve:
+        effective_darken = excess_L * (0.92 * clamp_intensity) * hair_feather
+
+        # Darken base luminance while re-adding high-frequency strand detail (1.10x boost for crisp individual strands)
         L_new_base = L_base - effective_darken
-        L_final = np.clip(L_new_base + L_detail, 15.0, 255.0)
+        L_final = np.clip(L_new_base + L_detail * 1.10, 15.0, 255.0)
 
         # Natural melanin undertone transfer for gray hairs
         max_excess = max(1.0, float(np.max(excess_L)))
-        chroma_blend = np.clip((effective_darken / max_excess) * 0.90, 0.0, 0.85)
-        A_final = A * (1.0 - chroma_blend) + ref_A * chroma_blend
-        B_final = B * (1.0 - chroma_blend) + ref_B * chroma_blend
+        blend_chroma = np.clip((excess_L / max_excess) * 0.95, 0.0, 0.95) * clamp_intensity * hair_feather
+        A_final = A * (1.0 - blend_chroma) + ref_A * blend_chroma
+        B_final = B * (1.0 - blend_chroma) + ref_B * blend_chroma
 
         res_lab = np.zeros_like(lab)
         res_lab[:, :, 0] = L_final
@@ -535,6 +596,9 @@ class PhotoEditorEngine:
         res_lab[:, :, 2] = B_final
 
         res_crop = cv2.cvtColor(np.clip(res_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        # Ensure zero change outside the active hair mask
+        mask_3d = (crop_mask > 0)[:, :, np.newaxis]
+        res_crop = np.where(mask_3d, res_crop, crop_img)
         result = img_bgr.copy()
         result[y1:y2, x1:x2] = res_crop
         return result

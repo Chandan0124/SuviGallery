@@ -642,7 +642,7 @@ Rectangle {
                     }
 
                     Text {
-                        text: lightboxRoot.activeEditTool === "eraser" ? (lightboxRoot.autoSnapEdges ? "Detecting object edges & inpainting with LaMa AI..." : "Inpainting background with LaMa AI...") : "Applying Natural Hair Darkening..."
+                        text: lightboxRoot.activeEditTool === "eraser" ? (lightboxRoot.autoSnapEdges ? "Detecting object edges & inpainting..." : "Inpainting background...") : (lightboxRoot.autoSnapEdges ? "Detecting hair edges & applying natural tone..." : "Applying Natural Hair Darkening...")
                         color: "#ffffff"
                         font.family: root.fSans
                         font.pixelSize: 12
@@ -1140,7 +1140,7 @@ Rectangle {
 
                 // Auto Edge Snap Toggle Button
                 Rectangle {
-                    visible: lightboxRoot.activeEditTool === "eraser"
+                    visible: lightboxRoot.activeEditTool === "eraser" || lightboxRoot.activeEditTool === "hair"
                     width: edgeSnapRow.implicitWidth + 18
                     height: 32
                     radius: 4
@@ -1373,7 +1373,7 @@ Rectangle {
                                 if (lightboxRoot.activeEditTool === "eraser") {
                                     gallery.applyMagicEraser(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.autoSnapEdges, lightboxRoot.inpaintMode, "");
                                 } else {
-                                    gallery.applyHairDarken(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.hairDarkness);
+                                    gallery.applyHairDarken(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.hairDarkness, lightboxRoot.autoSnapEdges);
                                 }
                             }
                         }

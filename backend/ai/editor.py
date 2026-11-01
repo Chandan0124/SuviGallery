@@ -448,10 +448,10 @@ class PhotoEditorEngine:
 
     def darken_hair(self, image_input: Any, mask: np.ndarray, intensity: float = 0.70) -> np.ndarray:
         """
-        Naturally darkens hair to rich black/dark tones using LAB color space curve modulation.
-        image_input: File path (str) or loaded BGR numpy array.
-        Preserves natural specular reflections, hair shine, and strand definition.
-        intensity: 0.0 (no change) to 1.0 (deep natural black).
+        Naturally darkens gray/light hair strands while preserving fine strand textures,
+        specular sheen, and scalp/skin tones. Leaves already-dark hair completely unaffected
+        for zero visible stroke boundaries.
+        intensity: 0.20 to 1.00 (subtle natural blend to deep rich black).
         """
         if isinstance(image_input, np.ndarray):
             img_bgr = image_input.copy()
@@ -464,43 +464,80 @@ class PhotoEditorEngine:
         if mask.shape[:2] != (h, w):
             mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
 
-        # Feather mask edges for natural organic transition with skin and background
-        feathered_mask = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (11, 11), 0)
-        if np.max(feathered_mask) == 0:
+        mask_bin = (mask > 20).astype(np.uint8) * 255
+        if np.count_nonzero(mask_bin) == 0:
             return img_bgr
 
-        # Convert to LAB color space (L = Luminance, A = green/red, B = blue/yellow)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        # Crop to active bounding box with padding for fast processing on large photos
+        ys, xs = np.where(mask_bin > 0)
+        pad = max(40, int(max(np.max(xs) - np.min(xs), np.max(ys) - np.min(ys)) * 0.15))
+        y1 = max(0, np.min(ys) - pad)
+        y2 = min(h, np.max(ys) + pad)
+        x1 = max(0, np.min(xs) - pad)
+        x2 = min(w, np.max(xs) + pad)
+
+        crop_img = img_bgr[y1:y2, x1:x2]
+        crop_mask = mask_bin[y1:y2, x1:x2].astype(np.float32) / 255.0
+        # Soft feather on brush mask edges
+        crop_mask = cv2.GaussianBlur(crop_mask, (15, 15), 0)
+
+        # Convert to LAB color space
+        lab = cv2.cvtColor(crop_img, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
         A = lab[:, :, 1]
         B = lab[:, :, 2]
 
-        # 1. Luminance curve modulation:
-        # Darkens midtones and gray/light strands while preserving high-contrast hair sheen
-        clamp_intensity = np.clip(intensity, 0.0, 1.0)
-        # S-curve reduction: L_norm ** 0.6 preserves darkest roots, scales highlights naturally
-        L_norm = L / 255.0
-        darken_factor = 1.0 - (0.75 * clamp_intensity * np.sqrt(L_norm))
-        L_darkened = np.clip(L * darken_factor, 10.0, 255.0)
+        # Sample natural dark hair reference in the region (candidates: L between 20 and 80, not skin)
+        dark_cands = (L > 20) & (L < 80) & ((A < 133) | (B < 135))
+        if np.count_nonzero(dark_cands) > 80:
+            ref_L = float(np.percentile(L[dark_cands], 30))
+            ref_A = float(np.median(A[dark_cands]))
+            ref_B = float(np.median(B[dark_cands]))
+        else:
+            ref_L = 45.0
+            ref_A = 128.0
+            ref_B = 133.0
 
-        # 2. Chroma neutralization (removes brassy yellow/brown/gray tint):
-        # Neutral center in 8-bit LAB is 128.0
-        A_darkened = 128.0 + (A - 128.0) * (1.0 - 0.60 * clamp_intensity)
-        B_darkened = 128.0 + (B - 128.0) * (1.0 - 0.75 * clamp_intensity)
+        # Skin & Scalp Protection:
+        # Human skin has warm tone (A > 131, B > 133). Protect skin and scalp from dark blotches
+        skin_A_excess = np.maximum(0.0, A - 131.0)
+        skin_B_excess = np.maximum(0.0, B - 133.0)
+        skin_score = np.clip((skin_A_excess * skin_B_excess) / 25.0, 0.0, 1.0)
+        # Scalp is lighter skin, protect it from turning dark
+        scalp_protect = skin_score * np.clip((L - 85.0) / 45.0, 0.0, 1.0)
 
-        # Blend with original image using the feathered mask weights
-        alpha = feathered_mask[:, :]
-        final_L = L_darkened * alpha + L * (1.0 - alpha)
-        final_A = A_darkened * alpha + A * (1.0 - alpha)
-        final_B = B_darkened * alpha + B * (1.0 - alpha)
+        # High-frequency strand texture extraction via edge-preserving filter
+        L_uint8 = np.clip(L, 0, 255).astype(np.uint8)
+        L_base = cv2.bilateralFilter(L_uint8, d=9, sigmaColor=35, sigmaSpace=7).astype(np.float32)
+        L_detail = L - L_base
 
-        result_lab = np.zeros_like(lab)
-        result_lab[:, :, 0] = np.clip(final_L, 0, 255)
-        result_lab[:, :, 1] = np.clip(final_A, 0, 255)
-        result_lab[:, :, 2] = np.clip(final_B, 0, 255)
+        # Only darken pixels where L_base > ref_L (i.e. gray/white/light hair)
+        # Already-dark hair has excess_L == 0 -> receives 0 change!
+        excess_L = np.maximum(0.0, L_base - ref_L)
+        clamp_intensity = float(np.clip(intensity, 0.15, 1.0))
 
-        result_bgr = cv2.cvtColor(result_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return result_bgr
+        # Effective progressive darkening factor
+        effective_darken = excess_L * (0.88 * clamp_intensity) * (1.0 - 0.88 * scalp_protect) * crop_mask
+
+        # Darken base luminance while re-adding high-frequency strand detail and specular shine
+        L_new_base = L_base - effective_darken
+        L_final = np.clip(L_new_base + L_detail, 15.0, 255.0)
+
+        # Natural melanin undertone transfer for gray hairs
+        max_excess = max(1.0, float(np.max(excess_L)))
+        chroma_blend = np.clip((effective_darken / max_excess) * 0.90, 0.0, 0.85)
+        A_final = A * (1.0 - chroma_blend) + ref_A * chroma_blend
+        B_final = B * (1.0 - chroma_blend) + ref_B * chroma_blend
+
+        res_lab = np.zeros_like(lab)
+        res_lab[:, :, 0] = L_final
+        res_lab[:, :, 1] = A_final
+        res_lab[:, :, 2] = B_final
+
+        res_crop = cv2.cvtColor(np.clip(res_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        result = img_bgr.copy()
+        result[y1:y2, x1:x2] = res_crop
+        return result
 
     def generate_preview(self, edited_bgr: np.ndarray, image_id: int) -> str:
         """

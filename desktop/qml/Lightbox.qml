@@ -16,6 +16,16 @@ Rectangle {
     property bool showFaces: false
     property int selectedFaceId: -1
 
+    // AI Photo Studio Properties
+    property bool isEditMode: false
+    property string activeEditTool: "eraser" // "eraser" | "hair"
+    property real brushSize: 36
+    property real hairDarkness: 0.70
+    property bool isComparingOriginal: false
+    property bool hasEditedPreview: false
+    property int editTimestamp: 0
+    property bool isEditingBusy: false
+
     Connections {
         target: gallery
         function onPhotoFacesLoaded(imageId, faces) {
@@ -32,6 +42,41 @@ Rectangle {
                 lightboxRoot.photosList = list;
             }
         }
+        function onEditPreviewReady(imageId, toolName, ts) {
+            if (lightboxRoot.currentPhoto && lightboxRoot.currentPhoto.id === imageId) {
+                lightboxRoot.hasEditedPreview = true;
+                lightboxRoot.editTimestamp = ts;
+                if (maskCanvas) {
+                    maskCanvas.clear();
+                }
+            }
+        }
+        function onEditSaved(newImgId, newPath) {
+            lightboxRoot.exitEditMode();
+            root.refreshPhotos();
+        }
+        function onIsEditingBusy(busy) {
+            lightboxRoot.isEditingBusy = busy;
+        }
+    }
+
+    function enterEditMode() {
+        lightboxRoot.isEditMode = true;
+        lightboxRoot.showFaces = false;
+        lightboxRoot.selectedFaceId = -1;
+        lightboxRoot.hasEditedPreview = false;
+        lightboxRoot.editTimestamp = 0;
+        if (maskCanvas) maskCanvas.clear();
+    }
+
+    function exitEditMode() {
+        if (currentPhoto) {
+            gallery.cancelPhotoEdit(currentPhoto.id);
+        }
+        lightboxRoot.isEditMode = false;
+        lightboxRoot.hasEditedPreview = false;
+        lightboxRoot.isComparingOriginal = false;
+        if (maskCanvas) maskCanvas.clear();
     }
 
     function show(photos, index) {
@@ -39,15 +84,21 @@ Rectangle {
         lightboxRoot.currentIndex = index;
         lightboxRoot.visible = true;
         lightboxRoot.selectedFaceId = -1;
+        lightboxRoot.isEditMode = false;
+        lightboxRoot.hasEditedPreview = false;
         loadFaces();
     }
 
     function hide() {
+        if (lightboxRoot.isEditMode) {
+            lightboxRoot.exitEditMode();
+        }
         lightboxRoot.visible = false;
         lightboxRoot.currentIndex = -1;
         lightboxRoot.currentFaces = [];
         lightboxRoot.selectedFaceId = -1;
         lightboxRoot.showFaces = false;
+        lightboxRoot.hasEditedPreview = false;
     }
 
     function loadFaces() {
@@ -57,6 +108,9 @@ Rectangle {
     }
 
     function prev() {
+        if (lightboxRoot.isEditMode) {
+            lightboxRoot.exitEditMode();
+        }
         if (currentIndex > 0) {
             currentIndex--;
             selectedFaceId = -1;
@@ -65,6 +119,9 @@ Rectangle {
     }
 
     function next() {
+        if (lightboxRoot.isEditMode) {
+            lightboxRoot.exitEditMode();
+        }
         if (currentIndex < photosList.length - 1) {
             currentIndex++;
             selectedFaceId = -1;
@@ -283,9 +340,44 @@ Rectangle {
                     onClicked: confirmRemovePhotoDialog.visible = true
                 }
 
+                // AI Photo Studio Edit Button
+                Button {
+                    id: btnEditStudio
+                    flat: true
+                    contentItem: RowLayout {
+                        spacing: 5
+                        Text {
+                            text: "\uE70F"
+                            font.family: lightboxRoot.fIcon
+                            font.pixelSize: 13
+                            color: lightboxRoot.isEditMode ? "#10b981" : root.cTextMain
+                        }
+                        Text {
+                            text: lightboxRoot.isEditMode ? "Exit Studio" : "AI Studio"
+                            color: lightboxRoot.isEditMode ? "#10b981" : root.cTextMain
+                            font.family: root.fSans
+                            font.bold: lightboxRoot.isEditMode
+                            font.pixelSize: 12
+                        }
+                    }
+                    background: Rectangle {
+                        color: lightboxRoot.isEditMode ? Qt.rgba(16/255, 185/255, 129/255, 0.20) : (btnEditStudio.hovered ? Qt.rgba(255, 255, 255, 0.08) : Qt.rgba(255, 255, 255, 0.04))
+                        border.color: lightboxRoot.isEditMode ? "#10b981" : (btnEditStudio.hovered ? Qt.rgba(255, 255, 255, 0.20) : Qt.rgba(255, 255, 255, 0.12))
+                        radius: 4
+                    }
+                    onClicked: {
+                        if (lightboxRoot.isEditMode) {
+                            lightboxRoot.exitEditMode();
+                        } else {
+                            lightboxRoot.enterEditMode();
+                        }
+                    }
+                }
+
                 // Toggle Face Boxes Button
                 Button {
                     id: btnToggleFaces
+                    visible: !lightboxRoot.isEditMode
                     flat: true
                     contentItem: RowLayout {
                         spacing: 5
@@ -347,15 +439,208 @@ Rectangle {
                 id: mainImage
                 anchors.fill: parent
                 anchors.margins: 20
-                source: currentPhoto ? ("image://raw/" + currentPhoto.id) : ""
+                source: currentPhoto ? (hasEditedPreview && !isComparingOriginal ? ("image://editpreview/" + currentPhoto.id + "?v=" + editTimestamp) : ("image://raw/" + currentPhoto.id)) : ""
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: false
             }
 
+            // Interactive AI Studio Draw / Masking Canvas
+            Item {
+                id: drawContainer
+                visible: lightboxRoot.isEditMode && mainImage.paintedWidth > 0 && !lightboxRoot.isComparingOriginal
+                x: mainImage.x + (mainImage.width - mainImage.paintedWidth) / 2
+                y: mainImage.y + (mainImage.height - mainImage.paintedHeight) / 2
+                width: mainImage.paintedWidth
+                height: mainImage.paintedHeight
+                clip: true
+
+                Canvas {
+                    id: maskCanvas
+                    anchors.fill: parent
+                    renderTarget: Canvas.Image
+                    renderStrategy: Canvas.Immediate
+
+                    property var strokes: []
+                    property var currentStroke: null
+                    property int strokeCount: 0
+
+                    onPaint: {
+                        var ctx = getContext("2d");
+                        ctx.clearRect(0, 0, width, height);
+
+                        for (var i = 0; i < strokes.length; i++) {
+                            var s = strokes[i];
+                            if (!s.points || s.points.length === 0) continue;
+
+                            ctx.beginPath();
+                            ctx.lineCap = "round";
+                            ctx.lineJoin = "round";
+                            ctx.lineWidth = s.width;
+                            ctx.strokeStyle = s.color;
+
+                            var pts = s.points;
+                            if (pts.length === 1) {
+                                ctx.arc(pts[0].x, pts[0].y, s.width / 2, 0, 2 * Math.PI);
+                                ctx.fillStyle = s.color;
+                                ctx.fill();
+                            } else {
+                                ctx.moveTo(pts[0].x, pts[0].y);
+                                for (var j = 1; j < pts.length; j++) {
+                                    ctx.lineTo(pts[j].x, pts[j].y);
+                                }
+                                ctx.stroke();
+                            }
+                        }
+
+                        if (currentStroke && currentStroke.points && currentStroke.points.length > 0) {
+                            ctx.beginPath();
+                            ctx.lineCap = "round";
+                            ctx.lineJoin = "round";
+                            ctx.lineWidth = currentStroke.width;
+                            ctx.strokeStyle = currentStroke.color;
+
+                            var activePts = currentStroke.points;
+                            if (activePts.length === 1) {
+                                ctx.arc(activePts[0].x, activePts[0].y, currentStroke.width / 2, 0, 2 * Math.PI);
+                                ctx.fillStyle = currentStroke.color;
+                                ctx.fill();
+                            } else {
+                                ctx.moveTo(activePts[0].x, activePts[0].y);
+                                for (var k = 1; k < activePts.length; k++) {
+                                    ctx.lineTo(activePts[k].x, activePts[k].y);
+                                }
+                                ctx.stroke();
+                            }
+                        }
+                    }
+
+                    onWidthChanged: requestPaint()
+                    onHeightChanged: requestPaint()
+
+                    function clear() {
+                        strokes = [];
+                        currentStroke = null;
+                        strokeCount = 0;
+                        requestPaint();
+                    }
+
+                    function undo() {
+                        if (strokes.length > 0) {
+                            strokes.pop();
+                            strokeCount = strokes.length;
+                            requestPaint();
+                        }
+                    }
+                }
+
+                MouseArea {
+                    id: drawMouseArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.BlankCursor
+                    enabled: lightboxRoot.isEditMode && !lightboxRoot.isEditingBusy && !lightboxRoot.isComparingOriginal
+
+                    property real cursorX: 0
+                    property real cursorY: 0
+                    property bool isInside: false
+
+                    onEntered: isInside = true
+                    onExited: isInside = false
+
+                    onPositionChanged: function(mouse) {
+                        cursorX = mouse.x;
+                        cursorY = mouse.y;
+                        if (pressed && maskCanvas.currentStroke) {
+                            maskCanvas.currentStroke.points.push({ x: mouse.x, y: mouse.y });
+                            maskCanvas.requestPaint();
+                        }
+                    }
+
+                    onPressed: function(mouse) {
+                        cursorX = mouse.x;
+                        cursorY = mouse.y;
+                        var strokeCol = lightboxRoot.activeEditTool === "eraser" ? "rgba(239, 68, 68, 0.60)" : "rgba(56, 189, 248, 0.60)";
+                        maskCanvas.currentStroke = {
+                            color: strokeCol,
+                            width: lightboxRoot.brushSize,
+                            points: [{ x: mouse.x, y: mouse.y }]
+                        };
+                        maskCanvas.requestPaint();
+                    }
+
+                    onReleased: function(mouse) {
+                        if (maskCanvas.currentStroke) {
+                            maskCanvas.strokes.push(maskCanvas.currentStroke);
+                            maskCanvas.currentStroke = null;
+                            maskCanvas.strokeCount = maskCanvas.strokes.length;
+                            maskCanvas.requestPaint();
+                        }
+                    }
+
+                    onCanceled: {
+                        if (maskCanvas.currentStroke) {
+                            maskCanvas.strokes.push(maskCanvas.currentStroke);
+                            maskCanvas.currentStroke = null;
+                            maskCanvas.strokeCount = maskCanvas.strokes.length;
+                            maskCanvas.requestPaint();
+                        }
+                    }
+                }
+
+                // Smooth Brush Circle Cursor Follower
+                Rectangle {
+                    id: brushCursor
+                    width: lightboxRoot.brushSize
+                    height: lightboxRoot.brushSize
+                    radius: lightboxRoot.brushSize / 2
+                    color: "transparent"
+                    border.color: lightboxRoot.activeEditTool === "eraser" ? "#ef4444" : "#38bdf8"
+                    border.width: 1.5
+                    x: drawMouseArea.cursorX - width / 2
+                    y: drawMouseArea.cursorY - height / 2
+                    visible: drawMouseArea.isInside && drawMouseArea.enabled
+                    z: 20
+                }
+            }
+
+            // Busy Processing Notification Pill
+            Rectangle {
+                id: busyEditPill
+                visible: lightboxRoot.isEditingBusy
+                anchors.centerIn: parent
+                width: busyRow.implicitWidth + 32
+                height: 44
+                radius: 22
+                color: Qt.rgba(20/255, 20/255, 20/255, 0.92)
+                border.color: "#10b981"
+                border.width: 1.5
+                z: 50
+
+                RowLayout {
+                    id: busyRow
+                    anchors.centerIn: parent
+                    spacing: 10
+
+                    BusyIndicator {
+                        running: lightboxRoot.isEditingBusy
+                        implicitWidth: 22
+                        implicitHeight: 22
+                    }
+
+                    Text {
+                        text: lightboxRoot.activeEditTool === "eraser" ? "Erasing & inpainting with DirectML GPU..." : "Applying Natural Hair Darkening..."
+                        color: "#ffffff"
+                        font.family: root.fSans
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+            }
+
             // Face Bounding Boxes Overlay
             Repeater {
-                model: (mainImage.paintedWidth > 0 && currentFaces.length > 0 && (showFaces || selectedFaceId !== -1)) ? currentFaces : []
+                model: (!lightboxRoot.isEditMode && mainImage.paintedWidth > 0 && currentFaces.length > 0 && (showFaces || selectedFaceId !== -1)) ? currentFaces : []
                 delegate: Item {
                     id: faceBoxItem
                     readonly property var face: modelData
@@ -458,7 +743,7 @@ Rectangle {
                 anchors.leftMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
                 flat: true
-                visible: currentIndex > 0
+                visible: !lightboxRoot.isEditMode && currentIndex > 0
                 contentItem: Text {
                     text: "\uE76B"
                     font.family: lightboxRoot.fIcon
@@ -483,7 +768,7 @@ Rectangle {
                 anchors.rightMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
                 flat: true
-                visible: currentIndex < photosList.length - 1
+                visible: !lightboxRoot.isEditMode && currentIndex < photosList.length - 1
                 contentItem: Text {
                     text: "\uE76C"
                     font.family: lightboxRoot.fIcon
@@ -509,6 +794,7 @@ Rectangle {
             height: 56
             color: root.cBgSurface
             border.color: root.cBorder
+            visible: !lightboxRoot.isEditMode
 
             RowLayout {
                 anchors.fill: parent
@@ -640,6 +926,410 @@ Rectangle {
                                 ToolTip.text: "Set as default picture"
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // AI Photo Studio Drawer (Bottom Bar)
+        Rectangle {
+            id: editStudioDrawer
+            Layout.fillWidth: true
+            height: 64
+            color: "#1c1c1c"
+            border.color: Qt.rgba(255, 255, 255, 0.08)
+            visible: lightboxRoot.isEditMode
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 20
+                anchors.rightMargin: 20
+                spacing: 14
+
+                // Tool Switcher Tabs
+                RowLayout {
+                    spacing: 6
+
+                    // Eraser Tool Tab
+                    Rectangle {
+                        width: 118
+                        height: 36
+                        radius: 6
+                        color: lightboxRoot.activeEditTool === "eraser" ? Qt.rgba(239/255, 68/255, 68/255, 0.18) : (eraserTabMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : Qt.rgba(255, 255, 255, 0.04))
+                        border.color: lightboxRoot.activeEditTool === "eraser" ? "#ef4444" : Qt.rgba(255, 255, 255, 0.12)
+                        border.width: lightboxRoot.activeEditTool === "eraser" ? 1.5 : 1
+
+                        RowLayout {
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Text {
+                                text: "\uE75C"
+                                font.family: lightboxRoot.fIcon
+                                font.pixelSize: 13
+                                color: lightboxRoot.activeEditTool === "eraser" ? "#ef4444" : root.cTextMain
+                            }
+                            Text {
+                                text: "Magic Eraser"
+                                color: lightboxRoot.activeEditTool === "eraser" ? "#ffffff" : root.cTextMain
+                                font.family: root.fSans
+                                font.pixelSize: 12
+                                font.bold: lightboxRoot.activeEditTool === "eraser"
+                            }
+                        }
+
+                        MouseArea {
+                            id: eraserTabMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: lightboxRoot.activeEditTool = "eraser"
+                        }
+                    }
+
+                    // Hair Darkener Tool Tab
+                    Rectangle {
+                        width: 118
+                        height: 36
+                        radius: 6
+                        color: lightboxRoot.activeEditTool === "hair" ? Qt.rgba(56/255, 189/255, 248/255, 0.18) : (hairTabMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : Qt.rgba(255, 255, 255, 0.04))
+                        border.color: lightboxRoot.activeEditTool === "hair" ? "#38bdf8" : Qt.rgba(255, 255, 255, 0.12)
+                        border.width: lightboxRoot.activeEditTool === "hair" ? 1.5 : 1
+
+                        RowLayout {
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Text {
+                                text: "\uE790"
+                                font.family: lightboxRoot.fIcon
+                                font.pixelSize: 13
+                                color: lightboxRoot.activeEditTool === "hair" ? "#38bdf8" : root.cTextMain
+                            }
+                            Text {
+                                text: "Darken Hair"
+                                color: lightboxRoot.activeEditTool === "hair" ? "#ffffff" : root.cTextMain
+                                font.family: root.fSans
+                                font.pixelSize: 12
+                                font.bold: lightboxRoot.activeEditTool === "hair"
+                            }
+                        }
+
+                        MouseArea {
+                            id: hairTabMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: lightboxRoot.activeEditTool = "hair"
+                        }
+                    }
+                }
+
+                // Vertical Divider
+                Rectangle {
+                    width: 1
+                    height: 28
+                    color: Qt.rgba(255, 255, 255, 0.12)
+                }
+
+                // Brush Size Control
+                RowLayout {
+                    spacing: 8
+                    Text {
+                        text: "Brush: " + Math.round(lightboxRoot.brushSize) + "px"
+                        color: root.cTextMuted
+                        font.family: root.fSans
+                        font.pixelSize: 12
+                        Layout.minimumWidth: 76
+                    }
+                    Slider {
+                        id: brushSlider
+                        from: 10
+                        to: 120
+                        value: lightboxRoot.brushSize
+                        stepSize: 2
+                        Layout.preferredWidth: 100
+                        onMoved: lightboxRoot.brushSize = value
+
+                        background: Rectangle {
+                            x: brushSlider.leftPadding
+                            y: brushSlider.topPadding + brushSlider.availableHeight / 2 - 2
+                            width: brushSlider.availableWidth
+                            height: 4
+                            radius: 2
+                            color: Qt.rgba(255, 255, 255, 0.15)
+                            Rectangle {
+                                width: brushSlider.visualPosition * parent.width
+                                height: parent.height
+                                color: "#10b981"
+                                radius: 2
+                            }
+                        }
+
+                        handle: Rectangle {
+                            x: brushSlider.leftPadding + brushSlider.visualPosition * (brushSlider.availableWidth - width)
+                            y: brushSlider.topPadding + brushSlider.availableHeight / 2 - height / 2
+                            implicitWidth: 16
+                            implicitHeight: 16
+                            radius: 8
+                            color: "#ffffff"
+                            border.color: brushSlider.pressed ? "#059669" : "#10b981"
+                            border.width: 2
+                        }
+                    }
+                }
+
+                // Hair Depth Control
+                RowLayout {
+                    visible: lightboxRoot.activeEditTool === "hair"
+                    spacing: 8
+                    Text {
+                        text: "Depth: " + Math.round(lightboxRoot.hairDarkness * 100) + "%"
+                        color: root.cTextMuted
+                        font.family: root.fSans
+                        font.pixelSize: 12
+                        Layout.minimumWidth: 72
+                    }
+                    Slider {
+                        id: hairSlider
+                        from: 0.20
+                        to: 1.00
+                        value: lightboxRoot.hairDarkness
+                        stepSize: 0.05
+                        Layout.preferredWidth: 90
+                        onMoved: lightboxRoot.hairDarkness = value
+
+                        background: Rectangle {
+                            x: hairSlider.leftPadding
+                            y: hairSlider.topPadding + hairSlider.availableHeight / 2 - 2
+                            width: hairSlider.availableWidth
+                            height: 4
+                            radius: 2
+                            color: Qt.rgba(255, 255, 255, 0.15)
+                            Rectangle {
+                                width: hairSlider.visualPosition * parent.width
+                                height: parent.height
+                                color: "#38bdf8"
+                                radius: 2
+                            }
+                        }
+
+                        handle: Rectangle {
+                            x: hairSlider.leftPadding + hairSlider.visualPosition * (hairSlider.availableWidth - width)
+                            y: hairSlider.topPadding + hairSlider.availableHeight / 2 - height / 2
+                            implicitWidth: 16
+                            implicitHeight: 16
+                            radius: 8
+                            color: "#ffffff"
+                            border.color: hairSlider.pressed ? "#0284c7" : "#38bdf8"
+                            border.width: 2
+                        }
+                    }
+                }
+
+                // Vertical Divider
+                Rectangle {
+                    width: 1
+                    height: 28
+                    color: Qt.rgba(255, 255, 255, 0.12)
+                }
+
+                // Undo & Clear Brush Buttons
+                RowLayout {
+                    spacing: 6
+
+                    Rectangle {
+                        width: 32
+                        height: 32
+                        radius: 4
+                        color: undoMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.12) : Qt.rgba(255, 255, 255, 0.05)
+                        border.color: Qt.rgba(255, 255, 255, 0.12)
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "\uE7A7"
+                            font.family: lightboxRoot.fIcon
+                            font.pixelSize: 13
+                            color: root.cTextMain
+                        }
+
+                        MouseArea {
+                            id: undoMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: maskCanvas.undo()
+                        }
+
+                        ToolTip.visible: undoMouse.containsMouse
+                        ToolTip.text: "Undo last stroke"
+                        ToolTip.delay: 300
+                    }
+
+                    Rectangle {
+                        width: 32
+                        height: 32
+                        radius: 4
+                        color: clearMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.12) : Qt.rgba(255, 255, 255, 0.05)
+                        border.color: Qt.rgba(255, 255, 255, 0.12)
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "\uE74D"
+                            font.family: lightboxRoot.fIcon
+                            font.pixelSize: 13
+                            color: clearMouse.containsMouse ? "#ff99a4" : root.cTextMain
+                        }
+
+                        MouseArea {
+                            id: clearMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: maskCanvas.clear()
+                        }
+
+                        ToolTip.visible: clearMouse.containsMouse
+                        ToolTip.text: "Clear drawn mask"
+                        ToolTip.delay: 300
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Actions Group: Compare, Apply, Save, Done
+                RowLayout {
+                    spacing: 8
+
+                    // Hold to Compare
+                    Rectangle {
+                        visible: lightboxRoot.hasEditedPreview
+                        width: compareRow.implicitWidth + 20
+                        height: 34
+                        radius: 4
+                        color: lightboxRoot.isComparingOriginal ? Qt.rgba(56/255, 189/255, 248/255, 0.25) : (compareMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.10) : Qt.rgba(255, 255, 255, 0.05))
+                        border.color: lightboxRoot.isComparingOriginal ? "#38bdf8" : Qt.rgba(255, 255, 255, 0.15)
+
+                        RowLayout {
+                            id: compareRow
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Text {
+                                text: "\uE7B5"
+                                font.family: lightboxRoot.fIcon
+                                font.pixelSize: 12
+                                color: lightboxRoot.isComparingOriginal ? "#38bdf8" : root.cTextMain
+                            }
+                            Text {
+                                text: lightboxRoot.isComparingOriginal ? "Showing Original" : "Hold to Compare"
+                                color: lightboxRoot.isComparingOriginal ? "#38bdf8" : root.cTextMain
+                                font.family: root.fSans
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        MouseArea {
+                            id: compareMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onPressed: lightboxRoot.isComparingOriginal = true
+                            onReleased: lightboxRoot.isComparingOriginal = false
+                            onCanceled: lightboxRoot.isComparingOriginal = false
+                        }
+                    }
+
+                    // Apply Action Button
+                    Button {
+                        id: btnApplyEdit
+                        enabled: !lightboxRoot.isEditingBusy && maskCanvas.strokeCount > 0
+                        flat: true
+                        contentItem: RowLayout {
+                            spacing: 6
+                            Text {
+                                text: lightboxRoot.isEditingBusy ? "\uE895" : (lightboxRoot.activeEditTool === "eraser" ? "\uE75C" : "\uE790")
+                                font.family: lightboxRoot.fIcon
+                                font.pixelSize: 13
+                                color: "#ffffff"
+                            }
+                            Text {
+                                text: lightboxRoot.isEditingBusy ? "Processing..." : (lightboxRoot.activeEditTool === "eraser" ? "Erase Object" : "Darken Hair")
+                                color: "#ffffff"
+                                font.family: root.fSans
+                                font.bold: true
+                                font.pixelSize: 12
+                            }
+                        }
+                        background: Rectangle {
+                            color: !btnApplyEdit.enabled ? Qt.rgba(255, 255, 255, 0.08) : (btnApplyEdit.hovered ? "#059669" : "#10b981")
+                            radius: 4
+                            implicitHeight: 34
+                            implicitWidth: 120
+                        }
+                        onClicked: {
+                            if (lightboxRoot.currentPhoto) {
+                                var maskData = maskCanvas.toDataURL("image/png");
+                                if (lightboxRoot.activeEditTool === "eraser") {
+                                    gallery.applyMagicEraser(lightboxRoot.currentPhoto.id, maskData);
+                                } else {
+                                    gallery.applyHairDarken(lightboxRoot.currentPhoto.id, maskData, lightboxRoot.hairDarkness);
+                                }
+                            }
+                        }
+                    }
+
+                    // Save Non-Destructive Copy Button
+                    Button {
+                        id: btnSaveEdit
+                        visible: lightboxRoot.hasEditedPreview
+                        flat: true
+                        contentItem: RowLayout {
+                            spacing: 6
+                            Text {
+                                text: "\uE74E"
+                                font.family: lightboxRoot.fIcon
+                                font.pixelSize: 13
+                                color: "#ffffff"
+                            }
+                            Text {
+                                text: "Save as Copy"
+                                color: "#ffffff"
+                                font.family: root.fSans
+                                font.bold: true
+                                font.pixelSize: 12
+                            }
+                        }
+                        background: Rectangle {
+                            color: btnSaveEdit.hovered ? "#0091ff" : "#0078d4"
+                            radius: 4
+                            implicitHeight: 34
+                            implicitWidth: 120
+                        }
+                        onClicked: {
+                            if (lightboxRoot.currentPhoto) {
+                                gallery.saveEditedPhoto(lightboxRoot.currentPhoto.id);
+                            }
+                        }
+                    }
+
+                    // Done / Exit Studio Button
+                    Button {
+                        id: btnCancelEdit
+                        flat: true
+                        contentItem: Text {
+                            text: "Done"
+                            color: root.cTextMain
+                            font.family: root.fSans
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: btnCancelEdit.hovered ? Qt.rgba(255, 255, 255, 0.12) : Qt.rgba(255, 255, 255, 0.05)
+                            border.color: Qt.rgba(255, 255, 255, 0.12)
+                            radius: 4
+                            implicitHeight: 34
+                            implicitWidth: 65
+                        }
+                        onClicked: lightboxRoot.exitEditMode()
                     }
                 }
             }

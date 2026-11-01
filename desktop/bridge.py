@@ -1,8 +1,12 @@
 import os
 import sys
+import time
 import subprocess
 import threading
 from typing import List, Optional
+
+import cv2
+from PIL import Image
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl, QPoint, Qt, QTimer, QMimeData
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QDrag, QPixmap
@@ -18,8 +22,12 @@ class GalleryBridge(QObject):
     photoFacesLoaded = Signal(int, list) # image_id, faces
     photoLocationUpdated = Signal(int, str) # image_id, new_location
     toastNotification = Signal(str, str) # message, type ('success', 'info', 'warning')
+    editPreviewReady = Signal(int, str, int) # image_id, tool_name, timestamp
+    editSaved = Signal(int, str) # new_image_id, new_path
+    editCancelled = Signal(int) # image_id
+    isEditingBusy = Signal(bool) # true while processing
 
-    def __init__(self, db, thumb_mgr, scanner, face_engine, clusterer, clip_engine, worker):
+    def __init__(self, db, thumb_mgr, scanner, face_engine, clusterer, clip_engine, worker, editor_engine=None):
         super().__init__()
         self.db = db
         self.thumb_mgr = thumb_mgr
@@ -28,6 +36,7 @@ class GalleryBridge(QObject):
         self.clusterer = clusterer
         self.clip_engine = clip_engine
         self.worker = worker
+        self.editor_engine = editor_engine
 
         # Status polling timer
         self.timer = QTimer(self)
@@ -189,15 +198,24 @@ class GalleryBridge(QObject):
             self.foldersLoaded.emit(folders)
 
     @Slot()
-    def loadPeople(self):
+    @Slot(int)
+    def loadPeople(self, min_photos=5):
         with self.db.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("""
-                SELECT id, name, avatar_face_id, face_count, photo_count
-                FROM people
-                WHERE face_count > 0
-                ORDER BY photo_count DESC, face_count DESC
-            """)
+            if min_photos <= 1:
+                cur.execute("""
+                    SELECT id, name, avatar_face_id, face_count, photo_count
+                    FROM people
+                    WHERE face_count > 0
+                    ORDER BY (name NOT LIKE 'Person #%') DESC, photo_count DESC, face_count DESC
+                """)
+            else:
+                cur.execute("""
+                    SELECT id, name, avatar_face_id, face_count, photo_count
+                    FROM people
+                    WHERE face_count > 0 AND (name NOT LIKE 'Person #%' OR photo_count >= ?)
+                    ORDER BY (name NOT LIKE 'Person #%') DESC, photo_count DESC, face_count DESC
+                """, (min_photos,))
             self.peopleLoaded.emit([dict(r) for r in cur.fetchall()])
 
     @Slot(int)
@@ -295,9 +313,21 @@ class GalleryBridge(QObject):
 
     @Slot()
     def runClustering(self):
-        res = self.clusterer.cluster_all_unassigned_faces()
-        self.loadPeople()
-        self.toastNotification.emit(f"Clustering complete: {res.get('assigned_clusters', 0)} groups identified", "success")
+        def run():
+            self.toastNotification.emit("Clustering unassigned faces...", "info")
+            res = self.clusterer.cluster_all_unassigned_faces()
+            self.loadPeople()
+            self.toastNotification.emit(f"Clustering complete: {res.get('clusters_created', 0)} groups formed", "success")
+        threading.Thread(target=run, daemon=True).start()
+
+    @Slot()
+    def reclusterAll(self):
+        def run():
+            self.toastNotification.emit("Re-clustering unnamed faces with Cannot-Link constraints...", "info")
+            res = self.clusterer.recluster_unnamed_faces()
+            self.loadPeople()
+            self.toastNotification.emit(f"Clean re-clustering complete: {res.get('clusters_created', 0)} valid groups formed", "success")
+        threading.Thread(target=run, daemon=True).start()
 
     # ========================================================
     # Library Catalog Removal (Keeps disk files intact)
@@ -499,3 +529,132 @@ class GalleryBridge(QObject):
         if path and os.path.exists(path):
             resolved = os.path.abspath(path)
             subprocess.Popen(f'explorer.exe /select,"{resolved}"', shell=True)
+
+    # ========================================================
+    # AI Photo Editor Studio (GTX 1660 Super DirectML & OpenCV)
+    # ========================================================
+    @Slot(int, str)
+    def applyMagicEraser(self, image_id: int, mask_base64: str):
+        if not self.editor_engine or not mask_base64:
+            return
+
+        def run():
+            self.isEditingBusy.emit(True)
+            try:
+                path = self.db.get_image_path(image_id)
+                if not path or not os.path.exists(path):
+                    self.toastNotification.emit("Photo not found on disk", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
+
+                with Image.open(path) as img:
+                    orig_w, orig_h = img.size
+
+                mask_bin = self.editor_engine.decode_mask_base64(mask_base64, (orig_h, orig_w))
+                inpainted_bgr = self.editor_engine.inpaint_image(path, mask_bin)
+                self.editor_engine.generate_preview(inpainted_bgr, image_id)
+
+                ts = int(time.time())
+                self.editPreviewReady.emit(image_id, "eraser", ts)
+                self.toastNotification.emit("Magic Eraser applied! Preview ready.", "success")
+            except Exception as e:
+                print(f"[!] applyMagicEraser error: {e}")
+                self.toastNotification.emit(f"Erase error: {e}", "warning")
+            finally:
+                self.isEditingBusy.emit(False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @Slot(int, str, float)
+    def applyHairDarken(self, image_id: int, mask_base64: str, intensity: float):
+        if not self.editor_engine or not mask_base64:
+            return
+
+        def run():
+            self.isEditingBusy.emit(True)
+            try:
+                path = self.db.get_image_path(image_id)
+                if not path or not os.path.exists(path):
+                    self.toastNotification.emit("Photo not found on disk", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
+
+                with Image.open(path) as img:
+                    orig_w, orig_h = img.size
+
+                mask_bin = self.editor_engine.decode_mask_base64(mask_base64, (orig_h, orig_w))
+                darkened_bgr = self.editor_engine.darken_hair(path, mask_bin, intensity=intensity)
+                self.editor_engine.generate_preview(darkened_bgr, image_id)
+
+                ts = int(time.time())
+                self.editPreviewReady.emit(image_id, "hair", ts)
+                self.toastNotification.emit("Hair tone adjusted! Preview ready.", "success")
+            except Exception as e:
+                print(f"[!] applyHairDarken error: {e}")
+                self.toastNotification.emit(f"Hair tone error: {e}", "warning")
+            finally:
+                self.isEditingBusy.emit(False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @Slot(int)
+    def saveEditedPhoto(self, image_id: int):
+        if not self.editor_engine:
+            return
+
+        def run():
+            self.isEditingBusy.emit(True)
+            try:
+                original_path = self.db.get_image_path(image_id)
+                if not original_path or not os.path.exists(original_path):
+                    self.toastNotification.emit("Original photo not found", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
+
+                preview_path = os.path.join(self.editor_engine.editor_cache_dir, f"preview_{image_id}.jpg")
+                if not os.path.exists(preview_path):
+                    self.toastNotification.emit("No edited preview to save", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
+
+                preview_bgr = cv2.imread(preview_path)
+                if preview_bgr is None:
+                    self.toastNotification.emit("Could not read edited preview", "warning")
+                    self.isEditingBusy.emit(False)
+                    return
+
+                new_path = self.editor_engine.save_edited_copy(original_path, preview_bgr)
+                new_fn = os.path.basename(new_path)
+                new_dir = os.path.dirname(new_path)
+                f_size = os.path.getsize(new_path)
+                m_time = os.path.getmtime(new_path)
+
+                new_id = self.db.add_or_update_image(new_path, new_fn, new_dir, f_size, m_time)
+                self.thumb_mgr.get_or_generate_thumbnail(new_path, size=320)
+
+                try:
+                    os.remove(preview_path)
+                except Exception:
+                    pass
+
+                self.editSaved.emit(new_id, new_path)
+                self.loadFolders()
+                self.toastNotification.emit(f"Saved non-destructive copy: {new_fn}", "success")
+            except Exception as e:
+                print(f"[!] saveEditedPhoto error: {e}")
+                self.toastNotification.emit(f"Save error: {e}", "warning")
+            finally:
+                self.isEditingBusy.emit(False)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @Slot(int)
+    def cancelPhotoEdit(self, image_id: int):
+        if self.editor_engine:
+            preview_path = os.path.join(self.editor_engine.editor_cache_dir, f"preview_{image_id}.jpg")
+            if os.path.exists(preview_path):
+                try:
+                    os.remove(preview_path)
+                except Exception:
+                    pass
+        self.editCancelled.emit(image_id)

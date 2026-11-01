@@ -10,6 +10,7 @@ Item {
     property var peopleModel: []
     property var selectedPeopleIds: []
     property bool selectMode: false
+    property int minPhotosFilter: 5
 
     function selectOrOpenPerson(personId, personName, avatarFaceId) {
         if (peopleRoot.selectMode) {
@@ -39,7 +40,7 @@ Item {
         }
     }
 
-    Component.onCompleted: gallery.loadPeople()
+    Component.onCompleted: gallery.loadPeople(peopleRoot.minPhotosFilter)
 
     readonly property int targetWidth: 200
     readonly property int columnsCount: Math.max(2, Math.floor(grid.width / targetWidth))
@@ -305,6 +306,169 @@ Item {
                     Layout.fillWidth: true
                 }
 
+                // Minimum Photos Filter Button (Windows 11 Fluent Dropdown)
+                Button {
+                    id: btnMinPhotos
+                    flat: true
+                    contentItem: RowLayout {
+                        spacing: 6
+                        Text {
+                            text: "\uE71C"
+                            font.family: peopleRoot.fIcon
+                            font.pixelSize: 12
+                            color: "#ffffff"
+                        }
+                        Text {
+                            text: peopleRoot.minPhotosFilter === 10 
+                                ? "Min 10+ Photos ▾" 
+                                : (peopleRoot.minPhotosFilter === 5 ? "Min 5+ Photos ▾" : "All Photos ▾")
+                            color: "#ffffff"
+                            font.family: root.fSans
+                            font.pixelSize: 12
+                        }
+                    }
+                    background: Rectangle {
+                        color: (btnMinPhotos.hovered || minPhotosPopup.opened) ? Qt.rgba(255, 255, 255, 0.09) : Qt.rgba(255, 255, 255, 0.05)
+                        border.color: root.cBorder
+                        radius: 6
+                    }
+                    onClicked: minPhotosPopup.open()
+
+                    Popup {
+                        id: minPhotosPopup
+                        y: btnMinPhotos.height + 4
+                        width: 220
+                        padding: 6
+                        background: Rectangle {
+                            color: "#2c2c2c"
+                            border.color: Qt.rgba(255, 255, 255, 0.12)
+                            radius: 8
+                        }
+
+                        ColumnLayout {
+                            width: parent.width
+                            spacing: 2
+
+                            // 5+ Photos (Default / Clean)
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 32
+                                radius: 4
+                                color: opt5Mouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : (peopleRoot.minPhotosFilter === 5 ? Qt.rgba(16/255, 185/255, 129/255, 0.15) : "transparent")
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 10
+                                    spacing: 8
+                                    Text {
+                                        text: "\uE73E"
+                                        font.family: peopleRoot.fIcon
+                                        font.pixelSize: 11
+                                        color: "#10b981"
+                                        visible: peopleRoot.minPhotosFilter === 5
+                                    }
+                                    Text {
+                                        text: "5+ Photos (Hide strangers)"
+                                        color: "#ffffff"
+                                        font.family: root.fSans
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                MouseArea {
+                                    id: opt5Mouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        peopleRoot.minPhotosFilter = 5;
+                                        gallery.loadPeople(5);
+                                        minPhotosPopup.close();
+                                    }
+                                }
+                            }
+
+                            // 10+ Photos (Core People)
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 32
+                                radius: 4
+                                color: opt10Mouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : (peopleRoot.minPhotosFilter === 10 ? Qt.rgba(16/255, 185/255, 129/255, 0.15) : "transparent")
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 10
+                                    spacing: 8
+                                    Text {
+                                        text: "\uE73E"
+                                        font.family: peopleRoot.fIcon
+                                        font.pixelSize: 11
+                                        color: "#10b981"
+                                        visible: peopleRoot.minPhotosFilter === 10
+                                    }
+                                    Text {
+                                        text: "10+ Photos (Frequent only)"
+                                        color: "#ffffff"
+                                        font.family: root.fSans
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                MouseArea {
+                                    id: opt10Mouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        peopleRoot.minPhotosFilter = 10;
+                                        gallery.loadPeople(10);
+                                        minPhotosPopup.close();
+                                    }
+                                }
+                            }
+
+                            // Show All
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 32
+                                radius: 4
+                                color: optAllMouse.containsMouse ? Qt.rgba(255, 255, 255, 0.08) : (peopleRoot.minPhotosFilter === 1 ? Qt.rgba(16/255, 185/255, 129/255, 0.15) : "transparent")
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 10
+                                    spacing: 8
+                                    Text {
+                                        text: "\uE73E"
+                                        font.family: peopleRoot.fIcon
+                                        font.pixelSize: 11
+                                        color: "#10b981"
+                                        visible: peopleRoot.minPhotosFilter === 1
+                                    }
+                                    Text {
+                                        text: "Show All (incl. 1-4 photos)"
+                                        color: "#ffffff"
+                                        font.family: root.fSans
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                MouseArea {
+                                    id: optAllMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        peopleRoot.minPhotosFilter = 1;
+                                        gallery.loadPeople(1);
+                                        minPhotosPopup.close();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Button {
                     id: btnRecluster
                     flat: true
@@ -317,7 +481,7 @@ Item {
                             color: "#ffffff"
                         }
                         Text {
-                            text: "Re-cluster Now"
+                            text: "Clean Re-cluster"
                             color: "#ffffff"
                             font.family: root.fSans
                             font.pixelSize: 12
@@ -328,7 +492,11 @@ Item {
                         border.color: root.cBorder
                         radius: 6
                     }
-                    onClicked: gallery.runClustering()
+                    onClicked: gallery.reclusterAll()
+
+                    ToolTip.visible: btnRecluster.hovered
+                    ToolTip.delay: 350
+                    ToolTip.text: "Re-clusters unnamed people using Cannot-Link rules (preserves your named family members)"
                 }
             }
         }

@@ -103,3 +103,25 @@ class RawImageProvider(QQuickImageProvider):
         except Exception as e:
             print(f"[!] RawImageProvider error: {e}")
             return QPixmap()
+
+
+class EditPreviewProvider(QQuickImageProvider):
+    def __init__(self, editor):
+        super().__init__(QQuickImageProvider.ImageType.Pixmap)
+        self.editor = editor
+
+    def requestPixmap(self, id_str: str, size, requestedSize) -> QPixmap:
+        try:
+            image_id = int(id_str.split('?')[0])
+            preview_path = os.path.join(self.editor.editor_cache_dir, f"preview_{image_id}.jpg")
+            if os.path.exists(preview_path):
+                reader = QImageReader(preview_path)
+                reader.setAutoTransform(True)
+                img = reader.read()
+                if not img.isNull():
+                    return QPixmap.fromImage(img)
+                return QPixmap(preview_path)
+            return QPixmap()
+        except Exception as e:
+            print(f"[!] EditPreviewProvider error: {e}")
+            return QPixmap()

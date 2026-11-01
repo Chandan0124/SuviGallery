@@ -25,16 +25,17 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtGui import QIcon
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from backend.config import DB_PATH, CACHE_DIR, BASE_DIR, CLIP_DIR
+from backend.config import DB_PATH, CACHE_DIR, BASE_DIR, CLIP_DIR, EDITOR_DIR
 from backend.storage.db import Database
 from backend.storage.thumbnails import ThumbnailManager
 from backend.storage.scanner import DirectoryScanner
 from backend.ai.detector import FaceEngine
 from backend.ai.clusterer import FaceClusterer
 from backend.ai.clip_engine import ClipEngine
+from backend.ai.editor import PhotoEditorEngine
 from backend.worker import IndexingWorker
 
-from desktop.image_providers import ThumbnailProvider, FaceThumbnailProvider, RawImageProvider
+from desktop.image_providers import ThumbnailProvider, FaceThumbnailProvider, RawImageProvider, EditPreviewProvider
 from desktop.bridge import GalleryBridge
 
 def main():
@@ -69,8 +70,11 @@ def main():
     worker.start()
     app.aboutToQuit.connect(worker.stop)
 
+    print("[*] Initializing AI Photo Editor Studio (DirectML/GTX 1660 Super)...")
+    editor_engine = PhotoEditorEngine(models_dir=EDITOR_DIR, cache_dir=CACHE_DIR)
+
     # Create Native Bridge & QML Engine
-    bridge = GalleryBridge(db, thumb_mgr, scanner, face_engine, clusterer, clip_engine, worker)
+    bridge = GalleryBridge(db, thumb_mgr, scanner, face_engine, clusterer, clip_engine, worker, editor_engine)
 
     engine = QQmlApplicationEngine()
 
@@ -78,6 +82,7 @@ def main():
     engine.addImageProvider("thumb", ThumbnailProvider(db, thumb_mgr))
     engine.addImageProvider("face", FaceThumbnailProvider(db, thumb_mgr))
     engine.addImageProvider("raw", RawImageProvider(db))
+    engine.addImageProvider("editpreview", EditPreviewProvider(editor_engine))
 
     # Expose Bridge to QML
     engine.rootContext().setContextProperty("gallery", bridge)

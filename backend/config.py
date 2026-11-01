@@ -9,6 +9,7 @@ DB_PATH = os.path.join(DATA_DIR, "facevault.db")
 CACHE_DIR = os.path.join(DATA_DIR, ".cache")
 MODELS_DIR = os.path.join(DATA_DIR, "models", "buffalo_s")
 CLIP_DIR = os.path.join(DATA_DIR, "models", "clip")
+EDITOR_DIR = os.path.join(DATA_DIR, "models", "editor")
 
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 5240

@@ -444,7 +444,9 @@ Rectangle {
                 source: currentPhoto ? (hasEditedPreview && !isComparingOriginal ? ("image://editpreview/" + currentPhoto.id + "?v=" + editTimestamp) : ("image://raw/" + currentPhoto.id)) : ""
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
-                cache: false
+                cache: true
+                sourceSize.width: 1920
+                sourceSize.height: 1080
             }
 
             // Interactive AI Studio Draw / Masking Canvas
@@ -455,7 +457,7 @@ Rectangle {
                 y: mainImage.y + (mainImage.height - mainImage.paintedHeight) / 2
                 width: mainImage.paintedWidth
                 height: mainImage.paintedHeight
-                clip: true
+                clip: false
 
                 Canvas {
                     id: maskCanvas
@@ -540,7 +542,7 @@ Rectangle {
                     id: drawMouseArea
                     anchors.fill: parent
                     hoverEnabled: true
-                    cursorShape: Qt.BlankCursor
+                    cursorShape: Qt.CrossCursor
                     enabled: lightboxRoot.isEditMode && !lightboxRoot.isEditingBusy && !lightboxRoot.isComparingOriginal
 
                     property real cursorX: 0
@@ -554,8 +556,19 @@ Rectangle {
                         cursorX = mouse.x;
                         cursorY = mouse.y;
                         if (pressed && maskCanvas.currentStroke) {
-                            maskCanvas.currentStroke.points.push({ x: mouse.x, y: mouse.y });
-                            maskCanvas.requestPaint();
+                            var pts = maskCanvas.currentStroke.points;
+                            if (pts.length > 0) {
+                                var lastPt = pts[pts.length - 1];
+                                var dx = mouse.x - lastPt.x;
+                                var dy = mouse.y - lastPt.y;
+                                if (dx * dx + dy * dy >= 4) {
+                                    pts.push({ x: mouse.x, y: mouse.y });
+                                    maskCanvas.requestPaint();
+                                }
+                            } else {
+                                pts.push({ x: mouse.x, y: mouse.y });
+                                maskCanvas.requestPaint();
+                            }
                         }
                     }
 

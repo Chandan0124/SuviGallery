@@ -109,18 +109,35 @@ class EditPreviewProvider(QQuickImageProvider):
     def __init__(self, editor):
         super().__init__(QQuickImageProvider.ImageType.Pixmap)
         self.editor = editor
+        self._pixmap_cache = {}
 
     def requestPixmap(self, id_str: str, size, requestedSize) -> QPixmap:
         try:
-            image_id = int(id_str.split('?')[0])
+            # Parse id and version
+            parts = id_str.split('?')
+            image_id = int(parts[0])
+            cache_key = id_str
+
+            if cache_key in self._pixmap_cache:
+                return self._pixmap_cache[cache_key]
+
             preview_path = os.path.join(self.editor.editor_cache_dir, f"preview_{image_id}.jpg")
             if os.path.exists(preview_path):
                 reader = QImageReader(preview_path)
                 reader.setAutoTransform(True)
+                if requestedSize.isValid() and requestedSize.width() > 0 and requestedSize.height() > 0:
+                    reader.setScaledSize(requestedSize)
                 img = reader.read()
                 if not img.isNull():
-                    return QPixmap.fromImage(img)
-                return QPixmap(preview_path)
+                    pix = QPixmap.fromImage(img)
+                    # Keep latest preview in memory
+                    self._pixmap_cache.clear()
+                    self._pixmap_cache[cache_key] = pix
+                    return pix
+                pix = QPixmap(preview_path)
+                self._pixmap_cache.clear()
+                self._pixmap_cache[cache_key] = pix
+                return pix
             return QPixmap()
         except Exception as e:
             print(f"[!] EditPreviewProvider error: {e}")
